@@ -1,0 +1,44 @@
+# Node
+node_modules/
+.npm/
+
+# Next.js
+.next/
+out/
+
+# Env files
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs
+*.log
+
+# OS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Databases and app data
+data/
+*.db
+*.sqlite
+*.sqlite3
+frontend/data/
+frontend/data/audit.db
+frontend/data/portal-storage-state.json
+
+# TypeScript
+tsconfig.tsbuildinfo
+
+# Lockfiles (optional)
+package-lock.json
+
+# Playwright/test artifacts
+test-results/
+
+# Misc
+coverage/
