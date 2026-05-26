@@ -1,0 +1,28 @@
+{
+  "name": "hefamaa-smart-registry-agent-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --webpack",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "googleapis": "^172.0.0",
+    "lucide-react": "latest",
+    "next": "latest",
+    "playwright": "^1.60.0",
+    "react": "latest",
+    "react-dom": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "tailwindcss": "latest",
+    "typescript": "latest"
+  }
+}

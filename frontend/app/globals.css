@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: "Inter", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --color-background: #f6f8fb;
+  --color-foreground: #0f172a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 44% 0%, rgba(16, 185, 129, 0.07), transparent 32rem),
+    #f6f8fb;
+  color: #0f172a;
+  font-family: var(--font-sans);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.dashboard-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.22) transparent;
+}
+
+.dashboard-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.dashboard-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.2);
+}
