@@ -1,8 +1,11 @@
+import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Browser, BrowserContext, Page } from "playwright";
+
+import { writePortalScanSnapshot } from "@/lib/portalScanSnapshots";
 
 type PortalSession = {
   browser?: Browser | null;
@@ -47,7 +50,9 @@ type FacilitySearchResultRow = {
   hefamaaId: string;
   category: string;
   registrationStatus: string;
+  recordDate?: string | null;
   renewalYear: number | null;
+  visibleFields?: Record<string, string>;
   text: string;
   hasAction: boolean;
 };
@@ -64,31 +69,62 @@ type PortalRenewalSelection = {
 
 type PortalFacilityStatus =
   | "document_queried"
+  | "payment_queried"
   | "upload_payment_pending_document_approval"
   | "payment_approved_pending_document_approval"
   | "document_approved_inspection_pending"
   | "inspection_report_upload_pending_approval"
   | "final_approval_pending"
+  | "registration_approved"
+  | "waiting_to_onboard"
   | "unknown_status";
 
-type PortalFacilityRecord = FacilitySearchResultRow & {
+type PortalApplicationType = "new_registration" | "renewal" | "unknown";
+type PortalFacilityType = "new_registration" | "existing_facility" | "unknown";
+type PortalScanStatus = "idle" | "running" | "completed" | "failed";
+
+type PortalScanProgress = {
+  completedAt: string | null;
+  error?: string;
+  portalReportedRecords: number | null;
+  scannedPages: number;
+  scannedRecords: number;
+  startedAt: string | null;
+  status: PortalScanStatus;
+};
+
+export type PortalFacilityRecord = FacilitySearchResultRow & {
+  applicationType: PortalApplicationType;
   normalizedStatus: PortalFacilityStatus;
-  recordDate?: string | null;
   lastSeen: string;
 };
 
 type PortalFacilitySummary = {
   totalFacilities: number;
+  totalPortalRecords: number;
+  portalReportedRecords: number | null;
+  categoryCounts: Array<{ category: string; count: number }>;
+  categoryPortalRecordCounts: Array<{ category: string; count: number }>;
+  applicationTypeCounts: Record<PortalApplicationType, number>;
+  facilityTypeCounts: Record<PortalFacilityType, number>;
   statusCounts: Record<PortalFacilityStatus, number>;
+  scanProgress: PortalScanProgress;
   lastScanned: string | null;
   monthlyRegistrationCounts: Array<{ month: string; count: number }>;
+  monthlyNewRegistrationCounts: Array<{ month: string; count: number }>;
+  monthlyRenewalCounts: Array<{ month: string; count: number }>;
+  yearlyPortalRecordCounts: Array<{ year: number; count: number }>;
   yearlyRenewalCounts: Array<{ year: number; count: number }>;
   note?: string;
 };
 
 type PortalRuntimeStore = {
   cleanupHooksAttached: boolean;
+  dedicatedBrowserPid?: number;
   hostResolveCheckedAt: number;
+  openingSession: Promise<PortalSession> | null;
+  scanPromise: Promise<void> | null;
+  scanProgress: PortalScanProgress;
   session: PortalSession | null;
 };
 
@@ -101,8 +137,30 @@ const portalRuntime =
   (globalPortalRuntime.__hefamaaPortalRuntime = {
     cleanupHooksAttached: false,
     hostResolveCheckedAt: 0,
+    openingSession: null,
+    scanPromise: null,
+    scanProgress: {
+      completedAt: null,
+      portalReportedRecords: null,
+      scannedPages: 0,
+      scannedRecords: 0,
+      startedAt: null,
+      status: "idle",
+    },
     session: null,
   });
+
+// Next.js hot reload can preserve the runtime object after new fields are added.
+portalRuntime.openingSession ??= null;
+portalRuntime.scanPromise ??= null;
+portalRuntime.scanProgress ??= {
+  completedAt: null,
+  portalReportedRecords: null,
+  scannedPages: 0,
+  scannedRecords: 0,
+  startedAt: null,
+  status: "idle",
+};
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
   return Promise.race([
@@ -171,11 +229,15 @@ async function persistPortalStorageState(session: PortalSession) {
 }
 
 async function closePortalSession(session: PortalSession, timeoutMs = 8_000) {
+  const dedicatedBrowserPid = portalRuntime.dedicatedBrowserPid ?? getPortalProfileLock(session.profileDir).pid;
+
   await withTimeout(
     (async () => {
       await persistPortalStorageState(session);
       await session.context.close().catch(() => undefined);
       await session.browser?.close().catch(() => undefined);
+      await terminateProcess(dedicatedBrowserPid, 3_000);
+      portalRuntime.dedicatedBrowserPid = undefined;
     })(),
     timeoutMs,
     "Timed out closing the HEFAMAA portal browser session.",
@@ -256,6 +318,39 @@ function getPortalBrowserChannel() {
 
 function browserChannelLabel(channel: string | undefined | null) {
   return channel || "bundled Playwright Chromium";
+}
+
+function getPortalDebuggingPort() {
+  const configuredPort = Number(process.env.HEFAMAA_PORTAL_DEBUG_PORT);
+  return Number.isInteger(configuredPort) && configuredPort >= 1024 && configuredPort <= 65535 ? configuredPort : 9333;
+}
+
+function getPortalChromeExecutable(defaultExecutable: string) {
+  const configuredExecutable = process.env.HEFAMAA_PORTAL_BROWSER_EXECUTABLE?.trim();
+  if (configuredExecutable) return configuredExecutable;
+
+  const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  return existsSync(macChrome) ? macChrome : defaultExecutable;
+}
+
+async function portalDebuggingEndpointReady(port: number) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(750) });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPortalDebuggingEndpoint(port: number, timeoutMs = 45_000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await portalDebuggingEndpointReady(port)) return;
+    await delay(200);
+  }
+
+  throw new Error(`Timed out waiting for the dedicated HEFAMAA portal browser on local debugging port ${port}.`);
 }
 
 function getPortalProfileLock(profileDir = getPortalProfileDir()): PortalProfileLock {
@@ -449,41 +544,47 @@ async function launchPersistentPortalContext(profileDir: string) {
   const { chromium } = await import("playwright");
   const browserChannel = getPortalBrowserChannel();
   const storageStatePath = getPortalStorageStatePath();
+  const debuggingPort = getPortalDebuggingPort();
   mkdirSync(profileDir, { recursive: true });
   mkdirSync(path.dirname(storageStatePath), { recursive: true });
 
-  let browser: Browser | null = null;
-
   try {
-    browser = await chromium.launch({
-      ...(browserChannel ? { channel: browserChannel } : {}),
-      chromiumSandbox: true,
-      headless: false,
-      timeout: 12_000,
-      args: [
-        "--start-maximized",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--disable-infobars",
-        "--disable-popup-blocking",
-        "--disable-blink-features=AutomationControlled",
-      ],
-    });
+    if (!(await portalDebuggingEndpointReady(debuggingPort))) {
+      const lock = getPortalProfileLock(profileDir);
+      if (lock.locked) throw portalProfileLockedError(lock, profileDir);
 
-    const context = await browser.newContext({
-      ignoreHTTPSErrors: true,
-      viewport: null,
-      ...(existsSync(storageStatePath) ? { storageState: storageStatePath } : {}),
-    });
+      const executable = getPortalChromeExecutable(chromium.executablePath());
+      const child = spawn(
+        executable,
+        [
+          `--remote-debugging-port=${debuggingPort}`,
+          `--user-data-dir=${profileDir}`,
+          "--start-maximized",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--disable-infobars",
+          "--disable-popup-blocking",
+          "--disable-blink-features=AutomationControlled",
+          getPortalUrl(),
+        ],
+        { detached: true, stdio: "ignore" },
+      );
+      child.unref();
+      portalRuntime.dedicatedBrowserPid = child.pid;
+      await waitForPortalDebuggingEndpoint(debuggingPort);
+    }
+
+    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${debuggingPort}`, { timeout: 5_000 });
+    const context = browser.contexts()[0];
+    if (!context) throw new Error("Dedicated HEFAMAA portal browser opened without an accessible browser context.");
 
     return { browser, browserChannel, context, storageStatePath };
   } catch (error) {
-    await browser?.close().catch(() => undefined);
     const message = error instanceof Error ? error.message : "";
 
     if (/Timeout|Timed out/i.test(message)) {
       throw new Error(
-        `Timed out opening the HEFAMAA portal browser with ${browserChannelLabel(browserChannel)}. Try again, or close extra Chrome windows if macOS is busy.`,
+        `Timed out opening the dedicated HEFAMAA portal browser with ${browserChannelLabel(browserChannel)}. Close an old HEFAMAA portal window or release the profile lock, then try again.`,
       );
     }
 
@@ -589,6 +690,15 @@ async function openPortalTab(options: { fastOpen?: boolean } = {}) {
 }
 
 async function getActiveSession() {
+  const openingSession = portalRuntime.openingSession;
+  if (!getSession() && openingSession) {
+    await openingSession;
+  }
+
+  if (!getSession() && (await portalDebuggingEndpointReady(getPortalDebuggingPort()))) {
+    await ensureSession({ fastOpen: true });
+  }
+
   const currentSession = getSession();
 
   if (currentSession) {
@@ -1015,6 +1125,12 @@ async function getFacilityResultRows(page: Page) {
       return idYear ? Number(idYear[1]) : anyYear ? Number(anyYear[1]) : null;
     }
 
+    function extractRecordDate(value: string) {
+      const cleaned = clean(value);
+      const match = cleaned.match(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-](?:\d{2}|\d{4}))\b/);
+      return match ? match[1].replace(/-/g, "/") : null;
+    }
+
     return Array.from(document.querySelectorAll("table tbody tr"))
       .map((row, index) => {
         const cells = Array.from(row.querySelectorAll("td, th")).map((cell) => clean(cell.textContent));
@@ -1036,6 +1152,11 @@ async function getFacilityResultRows(page: Page) {
           "";
         const renewalYear = extractRenewalYearFromText(hefamaaId || text);
         const recordDate = extractRecordDate(text);
+        const visibleFields = cells.reduce<Record<string, string>>((acc, cell, cellIndex) => {
+          const header = clean(headers[cellIndex]) || `Column ${cellIndex + 1}`;
+          if (cell) acc[header] = cell;
+          return acc;
+        }, {});
 
         return {
           index,
@@ -1045,6 +1166,7 @@ async function getFacilityResultRows(page: Page) {
           registrationStatus,
           renewalYear,
           recordDate,
+          visibleFields,
           text,
           hasAction: Boolean(action),
         };
@@ -1062,16 +1184,24 @@ function extractRecordDate(value: string) {
 function normalizePortalStatus(registrationStatus: string, renewalYear: number | null): PortalFacilityStatus {
   const value = String(registrationStatus || "").toLowerCase().trim();
 
+  if (value.includes("payment") && value.includes("quer")) {
+    return "payment_queried";
+  }
+
   if (value.includes("document") && value.includes("query")) {
     return "document_queried";
   }
 
-  if ((value.includes("upload") && value.includes("payment")) || value.includes("pending document")) {
-    return "upload_payment_pending_document_approval";
+  if (value.includes("waiting") && (value.includes("on-board") || value.includes("onboard"))) {
+    return "waiting_to_onboard";
   }
 
   if ((value.includes("payment approved") || value.includes("paid")) && value.includes("pending document")) {
     return "payment_approved_pending_document_approval";
+  }
+
+  if ((value.includes("upload") && value.includes("payment")) || value.includes("pending document")) {
+    return "upload_payment_pending_document_approval";
   }
 
   if (value.includes("document approved") && value.includes("inspection")) {
@@ -1108,11 +1238,99 @@ function normalizePortalStatus(registrationStatus: string, renewalYear: number |
       : "upload_payment_pending_document_approval";
   }
 
-  if (value.includes("approved")) {
-    return "payment_approved_pending_document_approval";
+  if (value.includes("registration approved") || value === "approved") {
+    return "registration_approved";
   }
 
   return "unknown_status";
+}
+
+function inferPortalApplicationType(record: FacilitySearchResultRow, normalizedStatus: PortalFacilityStatus): PortalApplicationType {
+  const value = `${record.text} ${record.registrationStatus}`.toLowerCase();
+
+  if (/\brenew(?:al|ed|ing)?\b/.test(value)) {
+    return "renewal";
+  }
+
+  if (/\bnew\s+(?:facility\s+)?registration\b|\binitial\s+registration\b/.test(value)) {
+    return "new_registration";
+  }
+
+  if (normalizedStatus === "document_approved_inspection_pending" || normalizedStatus === "inspection_report_upload_pending_approval") {
+    return "new_registration";
+  }
+
+  return "unknown";
+}
+
+function facilityRecordKey(record: FacilitySearchResultRow) {
+  return [normalizeSelectionName(record.facilityName), normalizeSelectionName(record.category)].join("|");
+}
+
+function classifyPortalFacilityRecords(records: PortalFacilityRecord[]) {
+  const grouped = new Map<string, PortalFacilityRecord[]>();
+
+  for (const record of records) {
+    const key = facilityRecordKey(record);
+    const group = grouped.get(key) ?? [];
+    group.push(record);
+    grouped.set(key, group);
+  }
+
+  for (const group of grouped.values()) {
+    const years = Array.from(new Set(group.map((record) => record.renewalYear).filter((year): year is number => Boolean(year)))).sort();
+    const firstYear = years[0] ?? null;
+
+    for (const record of group) {
+      const inferred = inferPortalApplicationType(record, record.normalizedStatus);
+      record.applicationType = inferred !== "unknown"
+        ? inferred
+        : firstYear && record.renewalYear && record.renewalYear > firstYear
+          ? "renewal"
+          : firstYear && record.renewalYear === firstYear
+            ? "new_registration"
+            : "unknown";
+    }
+  }
+
+  return records;
+}
+
+function latestUniqueFacilityRecords(records: PortalFacilityRecord[]) {
+  const latest = new Map<string, PortalFacilityRecord>();
+
+  for (const record of records) {
+    const key = facilityRecordKey(record);
+    const existing = latest.get(key);
+    if (!existing || (record.renewalYear ?? 0) > (existing.renewalYear ?? 0)) latest.set(key, record);
+  }
+
+  return Array.from(latest.values());
+}
+
+function countByFacilityType(records: PortalFacilityRecord[]) {
+  const grouped = new Map<string, PortalFacilityRecord[]>();
+  for (const record of records) {
+    const key = facilityRecordKey(record);
+    const group = grouped.get(key) ?? [];
+    group.push(record);
+    grouped.set(key, group);
+  }
+
+  const counts: Record<PortalFacilityType, number> = { new_registration: 0, existing_facility: 0, unknown: 0 };
+  const currentYear = getCurrentRenewalYear();
+
+  for (const group of grouped.values()) {
+    const years = Array.from(new Set(group.map((record) => record.renewalYear).filter((year): year is number => Boolean(year))));
+    const explicitRenewal = group.some((record) => record.applicationType === "renewal");
+    const latestYear = years.length ? Math.max(...years) : null;
+
+    if (years.length > 1 || explicitRenewal || (latestYear && latestYear < currentYear)) counts.existing_facility += 1;
+    else if (latestYear === currentYear || group.some((record) => record.applicationType === "new_registration")) counts.new_registration += 1;
+    else counts.unknown += 1;
+  }
+
+  return counts;
 }
 
 function portalFacilityCachePath() {
@@ -1185,19 +1403,28 @@ function summarizeStatus(records: PortalFacilityRecord[]) {
     return acc;
   }, {
     document_queried: 0,
+    payment_queried: 0,
     upload_payment_pending_document_approval: 0,
     payment_approved_pending_document_approval: 0,
     document_approved_inspection_pending: 0,
     inspection_report_upload_pending_approval: 0,
     final_approval_pending: 0,
+    registration_approved: 0,
+    waiting_to_onboard: 0,
     unknown_status: 0,
   });
 }
 
-function countByMonth(records: PortalFacilityRecord[]) {
+function applicationTypeForRecord(record: PortalFacilityRecord) {
+  return record.applicationType || inferPortalApplicationType(record, record.normalizedStatus || normalizePortalStatus(record.registrationStatus, record.renewalYear));
+}
+
+function countByMonth(records: PortalFacilityRecord[], applicationType?: PortalApplicationType) {
   const counts: Record<string, number> = {};
 
   for (const record of records) {
+    if (applicationType && applicationTypeForRecord(record) !== applicationType) continue;
+
     const date = parseDateString(record.recordDate);
     if (!date) continue;
 
@@ -1210,10 +1437,36 @@ function countByMonth(records: PortalFacilityRecord[]) {
     .map(([month, count]) => ({ month, count }));
 }
 
-function countByYear(records: PortalFacilityRecord[]) {
+function countByCategory(records: PortalFacilityRecord[]) {
+  const counts: Record<string, number> = {};
+
+  for (const record of records) {
+    const category = cleanPortalText(record.category) || "Uncategorised";
+    counts[category] = (counts[category] ?? 0) + 1;
+  }
+
+  return Object.entries(counts)
+    .sort(([, leftCount], [, rightCount]) => rightCount - leftCount)
+    .map(([category, count]) => ({ category, count }));
+}
+
+function countByApplicationType(records: PortalFacilityRecord[]) {
+  return records.reduce<Record<PortalApplicationType, number>>((acc, record) => {
+    acc[applicationTypeForRecord(record)] += 1;
+    return acc;
+  }, {
+    new_registration: 0,
+    renewal: 0,
+    unknown: 0,
+  });
+}
+
+function countByYear(records: PortalFacilityRecord[], applicationType?: PortalApplicationType) {
   const counts: Record<number, number> = {};
 
   for (const record of records) {
+    if (applicationType && applicationTypeForRecord(record) !== applicationType) continue;
+
     if (record.renewalYear) {
       counts[record.renewalYear] = (counts[record.renewalYear] ?? 0) + 1;
     }
@@ -1237,99 +1490,311 @@ function dedupeFacilityRecords(records: PortalFacilityRecord[]) {
   return Array.from(seen.values());
 }
 
-async function clickNextFacilityPage(page: Page) {
-  const nextButtons = page.locator(
-    [
-      'button[aria-label*="next" i]',
-      'a[aria-label*="next" i]',
-      'button:has-text("Next")',
-      'a:has-text("Next")',
-      'button:has-text("»")',
-      'a:has-text("»")',
-      '[role="button"]:has-text("Next")',
-    ].join(", "),
-  );
-  const count = await nextButtons.count();
-
-  for (let index = 0; index < count; index += 1) {
-    const button = nextButtons.nth(index);
-    const disabled = await button.getAttribute("disabled");
-    const ariaDisabled = await button.getAttribute("aria-disabled");
-    const hidden = !(await button.isVisible().catch(() => false));
-
-    if (!hidden && !disabled && ariaDisabled !== "true") {
-      await button.click().catch(() => undefined);
-      return true;
-    }
-  }
-
-  return false;
+async function facilityTableFingerprint(page: Page) {
+  return page.locator("#mainGrid tbody").innerText().catch(() => "");
 }
 
-async function scanFacilityList(page: Page, maxPages = 100) {
+async function readPortalReportedRecordCount(page: Page) {
+  const info = await page.locator("#mainGrid_info").innerText().catch(() => "");
+  const match = info.match(/of\s+([\d,]+)\s+entries/i);
+  return match ? Number(match[1].replace(/,/g, "")) : null;
+}
+
+async function prepareFacilityGridForFullScan(page: Page) {
+  const lengthSelector = page.locator('select[name="mainGrid_length"]');
+  if (await lengthSelector.count()) {
+    await lengthSelector.selectOption("100");
+    await page.waitForFunction(() => document.querySelectorAll("#mainGrid tbody tr").length >= 50 || !document.querySelector("#mainGrid_next:not(.disabled)"), null, { timeout: 30_000 }).catch(() => undefined);
+    await page.waitForFunction(() => {
+      const processing = document.querySelector<HTMLElement>("#mainGrid_processing");
+      return !processing || processing.style.display === "none";
+    }, null, { timeout: 30_000 }).catch(() => undefined);
+  }
+
+  const info = await page.locator("#mainGrid_info").innerText().catch(() => "");
+  if (!/Showing\s+1\s+to/i.test(info)) {
+    const firstPage = page.locator("#mainGrid_paginate .paginate_button:not(.previous):not(.next) a").first();
+    if (await firstPage.count()) {
+      await firstPage.click();
+      await page.waitForFunction(() => /Showing\s+1\s+to/i.test(document.querySelector("#mainGrid_info")?.textContent ?? ""), null, { timeout: 30_000 }).catch(() => undefined);
+    }
+  }
+}
+
+async function clickNextFacilityPage(page: Page, currentFingerprint: string) {
+  const next = page.locator("#mainGrid_next:not(.disabled) a");
+  if (!(await next.count())) return false;
+
+  await next.click();
+  await page.waitForFunction(
+    (previousFingerprint) => {
+      const processing = document.querySelector<HTMLElement>("#mainGrid_processing");
+      const fingerprint = document.querySelector("#mainGrid tbody")?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      return (!processing || processing.style.display === "none") && Boolean(fingerprint) && fingerprint !== previousFingerprint;
+    },
+    currentFingerprint.replace(/\s+/g, " ").trim(),
+    { timeout: 30_000 },
+  );
+  return true;
+}
+
+async function scanFacilityList(
+  page: Page,
+  maxPages = 500,
+  onProgress?: (progress: PortalScanProgress) => void,
+  onRecords?: (records: PortalFacilityRecord[]) => void,
+) {
   if (!page.url().startsWith(getFacilitiesUrl())) {
     await page.goto(getFacilitiesUrl(), { waitUntil: "domcontentloaded", timeout: 30_000 });
   }
 
   await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
   await page.waitForTimeout(800);
+
+  if (!(await page.locator("#mainGrid").count())) {
+    const title = await page.title().catch(() => "HEFAMAA portal");
+    throw new Error("The HEFAMAA facilities table is not visible on " + title + ". Open the portal, log in if required, then run Full Scan again.");
+  }
+
+  await prepareFacilityGridForFullScan(page);
+  const portalReportedRecords = await readPortalReportedRecordCount(page);
   const gathered: PortalFacilityRecord[] = [];
+  const seenPages = new Set<string>();
 
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
     const currentRows = await getFacilityResultRows(page);
-    const currentRecords = currentRows.map((row) => ({
-      ...row,
-      normalizedStatus: normalizePortalStatus(row.registrationStatus, row.renewalYear),
-      lastSeen: new Date().toISOString(),
-    }));
+    const domFingerprint = await facilityTableFingerprint(page);
+    const pageFingerprint = currentRows.map((row) => `${row.hefamaaId}|${row.facilityName}|${row.registrationStatus}`).join("::");
 
-    gathered.push(...currentRecords);
-
-    const hasNext = await clickNextFacilityPage(page);
-    if (!hasNext) {
+    if (pageFingerprint && seenPages.has(pageFingerprint)) {
       break;
     }
 
-    await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
-    await page.waitForTimeout(1_000);
+    if (pageFingerprint) {
+      seenPages.add(pageFingerprint);
+    }
+
+    const currentRecords = currentRows.map((row) => {
+      const normalizedStatus = normalizePortalStatus(row.registrationStatus, row.renewalYear);
+
+      return {
+        ...row,
+        applicationType: inferPortalApplicationType(row, normalizedStatus),
+        normalizedStatus,
+        lastSeen: new Date().toISOString(),
+      };
+    });
+
+    gathered.push(...currentRecords);
+    if ((pageIndex + 1) % 5 === 0) {
+      onRecords?.(classifyPortalFacilityRecords(dedupeFacilityRecords(gathered)));
+    }
+    onProgress?.({
+      completedAt: null,
+      portalReportedRecords,
+      scannedPages: pageIndex + 1,
+      scannedRecords: gathered.length,
+      startedAt: portalRuntime.scanProgress.startedAt,
+      status: "running",
+    });
+
+    const hasNext = await clickNextFacilityPage(page, domFingerprint);
+    if (!hasNext) break;
   }
 
-  return dedupeFacilityRecords(gathered);
+  const records = classifyPortalFacilityRecords(dedupeFacilityRecords(gathered));
+  onRecords?.(records);
+  return { portalReportedRecords, records };
+}
+
+function stampPortalScanRecords(records: PortalFacilityRecord[], lastSeen = new Date().toISOString()) {
+  return records.map((record) => ({
+    ...record,
+    lastSeen,
+  }));
 }
 
 export async function scanAllPortalFacilities() {
-  const session = await getActiveSession();
-  const { page } = session;
-  const records = await scanFacilityList(page);
-  const now = new Date().toISOString();
+  const session = await ensureSession({ fastOpen: false });
+  const primaryPage = session.page && !session.page.isClosed() ? session.page : null;
+  const scanPage = await session.context.newPage();
+  scanPage.setDefaultTimeout(15_000);
+  let partialRecords: PortalFacilityRecord[] = [];
+  let lastPartialWriteCount = 0;
 
-  const datedRecords = records.map((record) => ({
-    ...record,
-    lastSeen: now,
-  }));
+  try {
+    const { portalReportedRecords, records } = await scanFacilityList(
+      scanPage,
+      500,
+      (progress) => {
+        portalRuntime.scanProgress = progress;
+      },
+      (recordsSoFar) => {
+        partialRecords = recordsSoFar;
+        if (recordsSoFar.length - lastPartialWriteCount >= 500) {
+          writePortalFacilityCache(stampPortalScanRecords(recordsSoFar));
+          lastPartialWriteCount = recordsSoFar.length;
+        }
+      },
+    );
+    const now = new Date().toISOString();
+    const datedRecords = stampPortalScanRecords(records, now);
 
-  writePortalFacilityCache(datedRecords);
+    writePortalFacilityCache(datedRecords);
+
+    const latestFacilities = latestUniqueFacilityRecords(datedRecords);
+    const facilityTypeCounts = countByFacilityType(datedRecords);
+    const statusCounts = summarizeStatus(latestFacilities);
+  portalRuntime.scanProgress = {
+    completedAt: now,
+    portalReportedRecords,
+    scannedPages: portalRuntime.scanProgress.scannedPages,
+    scannedRecords: datedRecords.length,
+    startedAt: portalRuntime.scanProgress.startedAt,
+    status: "completed",
+  };
+
+    const result = {
+      totalFacilities: latestFacilities.length,
+      totalPortalRecords: datedRecords.length,
+      portalReportedRecords,
+      categoryCounts: countByCategory(latestFacilities),
+      categoryPortalRecordCounts: countByCategory(datedRecords),
+      applicationTypeCounts: countByApplicationType(datedRecords),
+      facilityTypeCounts,
+      statusCounts,
+      scanProgress: portalRuntime.scanProgress,
+      lastScanned: now,
+      monthlyRegistrationCounts: countByMonth(datedRecords),
+      monthlyNewRegistrationCounts: countByMonth(datedRecords, "new_registration"),
+      monthlyRenewalCounts: countByMonth(datedRecords, "renewal"),
+      yearlyPortalRecordCounts: countByYear(datedRecords),
+      yearlyRenewalCounts: countByYear(datedRecords, "renewal"),
+      note: datedRecords.length === 0 ? "No facility rows were found during portal scan." : undefined,
+    };
+    writePortalScanSnapshot({
+      categoryCounts: countByCategory(latestFacilities),
+      distinctFacilities: latestFacilities.length,
+      existingFacilities: facilityTypeCounts.existing_facility,
+      indexedRows: datedRecords.length,
+      newFacilities: facilityTypeCounts.new_registration,
+      portalReportedRecords,
+      records: datedRecords,
+      scannedPages: portalRuntime.scanProgress.scannedPages,
+      scannedRecords: datedRecords.length,
+      statusCounts,
+      unknownFacilities: facilityTypeCounts.unknown,
+    });
+    return result;
+  } catch (error) {
+    if (partialRecords.length) {
+      writePortalFacilityCache(stampPortalScanRecords(partialRecords));
+    }
+    throw error;
+  } finally {
+    await scanPage.close().catch(() => undefined);
+    if (primaryPage && !primaryPage.isClosed()) {
+      session.page = primaryPage;
+      setSession(session);
+    }
+  }
+}
+
+export function startPortalFacilityScan() {
+  if (portalRuntime.scanPromise) {
+    return getPortalFacilitySummary();
+  }
+
+  const startedAt = new Date().toISOString();
+  portalRuntime.scanProgress = {
+    completedAt: null,
+    portalReportedRecords: null,
+    scannedPages: 0,
+    scannedRecords: 0,
+    startedAt,
+    status: "running",
+  };
+
+  const scanPromise = scanAllPortalFacilities()
+    .then(() => undefined)
+    .catch((error) => {
+      portalRuntime.scanProgress = {
+        ...portalRuntime.scanProgress,
+        completedAt: new Date().toISOString(),
+        error: error instanceof Error ? error.message : "Portal scan failed",
+        status: "failed",
+      };
+      console.error("[portal/scan] full scan failed", error);
+    })
+    .finally(() => {
+      if (portalRuntime.scanPromise === scanPromise) portalRuntime.scanPromise = null;
+    });
+  portalRuntime.scanPromise = scanPromise;
+
+  return getPortalFacilitySummary();
+}
+
+export function getPortalFacilityExportRecords() {
+  return readPortalFacilityCache();
+}
+
+export function searchPortalFacilityCache(input: {
+  category?: string;
+  limit?: number;
+  query?: string;
+  status?: string;
+  year?: number;
+} = {}) {
+  const records = readPortalFacilityCache();
+  const query = cleanPortalText(input.query).toLowerCase();
+  const category = cleanPortalText(input.category).toLowerCase();
+  const status = cleanPortalText(input.status).toLowerCase();
+  const limit = Math.min(Math.max(input.limit ?? 50, 1), 250);
+  const matches = records.filter((record) => {
+    const searchable = [
+      record.facilityName,
+      record.hefamaaId,
+      record.category,
+      record.registrationStatus,
+      record.text,
+      ...Object.entries(record.visibleFields ?? {}).flatMap(([header, value]) => [header, value]),
+    ].join(" ").toLowerCase();
+
+    if (query && !searchable.includes(query)) return false;
+    if (category && cleanPortalText(record.category).toLowerCase() !== category) return false;
+    if (status && record.normalizedStatus !== status && cleanPortalText(record.registrationStatus).toLowerCase() !== status) return false;
+    if (input.year && record.renewalYear !== input.year) return false;
+    return true;
+  });
 
   return {
-    totalFacilities: datedRecords.length,
-    statusCounts: summarizeStatus(datedRecords),
-    lastScanned: now,
-    monthlyRegistrationCounts: countByMonth(datedRecords),
-    yearlyRenewalCounts: countByYear(datedRecords),
-    note: datedRecords.length === 0 ? "No facility rows were found during portal scan." : undefined,
+    cachedFacilities: records.length,
+    matchCount: matches.length,
+    records: matches.slice(0, limit),
   };
 }
 
-export async function getPortalFacilitySummary() {
-  const records = readPortalFacilityCache();
+export function getPortalFacilitySummary() {
+  const records = classifyPortalFacilityRecords(readPortalFacilityCache());
+  const latestFacilities = latestUniqueFacilityRecords(records);
   const lastScanned = records[0]?.lastSeen ?? null;
 
   return {
-    totalFacilities: records.length,
-    statusCounts: summarizeStatus(records),
+    totalFacilities: latestFacilities.length,
+    totalPortalRecords: records.length,
+    portalReportedRecords: portalRuntime.scanProgress.portalReportedRecords ?? (records.length || null),
+    categoryCounts: countByCategory(latestFacilities),
+    categoryPortalRecordCounts: countByCategory(records),
+    applicationTypeCounts: countByApplicationType(records),
+    facilityTypeCounts: countByFacilityType(records),
+    statusCounts: summarizeStatus(latestFacilities),
+    scanProgress: portalRuntime.scanProgress,
     lastScanned,
     monthlyRegistrationCounts: countByMonth(records),
-    yearlyRenewalCounts: countByYear(records),
+    monthlyNewRegistrationCounts: countByMonth(records, "new_registration"),
+    monthlyRenewalCounts: countByMonth(records, "renewal"),
+    yearlyPortalRecordCounts: countByYear(records),
+    yearlyRenewalCounts: countByYear(records, "renewal"),
     note: records.length === 0 ? "No cached portal facilities found. Run portal scan first." : undefined,
   };
 }
@@ -1485,37 +1950,69 @@ function buildRenewalSelectionFromRecord(input: {
 }
 
 export async function openPortal() {
-  const startedAt = Date.now();
-  const { page, storageStatePath } = await openPortalTab({ fastOpen: true });
+  const currentSession = getSession();
+
+  if (currentSession && !currentSession.page.isClosed()) {
+    const { page, storageStatePath } = await openPortalTab({ fastOpen: true });
+    return {
+      status: "opened",
+      url: page.url(),
+      requiresManualLogin: true,
+      persistentProfile: true,
+      browserChannel: browserChannelLabel(currentSession.browserChannel ?? getPortalBrowserChannel()),
+      profileName: storageStateName(storageStatePath ?? getPortalStorageStatePath()),
+      note: "HEFAMAA portal browser is already active and has been brought to the front.",
+    };
+  }
+
+  if (!portalRuntime.openingSession) {
+    const openingSession = ensureSession({ fastOpen: true });
+    portalRuntime.openingSession = openingSession;
+    void openingSession
+      .catch((error) => {
+        console.error("[portal/open] background browser startup failed", error);
+      })
+      .finally(() => {
+        if (portalRuntime.openingSession === openingSession) portalRuntime.openingSession = null;
+      });
+  }
 
   return {
-    status: "opened",
-    url: page.url(),
+    status: "opening",
+    url: getPortalUrl(),
     requiresManualLogin: true,
     persistentProfile: true,
-    browserChannel: browserChannelLabel(getSession()?.browserChannel ?? getPortalBrowserChannel()),
-    profileName: storageStateName(storageStatePath ?? getPortalStorageStatePath()),
-    note: "Portal browser requested in " + ((Date.now() - startedAt) / 1000).toFixed(1) + "s. Log in manually if HEFAMAA asks; the agent will reuse that session until the portal expires it.",
+    browserChannel: browserChannelLabel(getPortalBrowserChannel()),
+    profileName: storageStateName(getPortalStorageStatePath()),
+    note: "HEFAMAA portal browser launch requested. The dedicated portal window is opening in the background; log in manually if requested. Search and capture will reuse it when ready.",
   };
 }
 
 export async function getPortalSessionStatus() {
-  const currentSession = getSession();
+  let currentSession = getSession();
+
+  if ((!currentSession || currentSession.page.isClosed()) && (await portalDebuggingEndpointReady(getPortalDebuggingPort()))) {
+    currentSession = await ensureSession({ fastOpen: true }).catch(() => null);
+  }
+
+  const opening = Boolean(portalRuntime.openingSession);
   const active = Boolean(currentSession && !currentSession.page.isClosed());
   const profileDir = currentSession?.profileDir ?? getPortalProfileDir();
   const storageStatePath = currentSession?.storageStatePath ?? getPortalStorageStatePath();
   const lock = getPortalProfileLock(profileDir);
 
   return {
-    status: active ? "active" : "closed",
+    status: active ? "active" : opening ? "opening" : "closed",
     url: active ? currentSession?.page.url() : null,
     browserChannel: browserChannelLabel(currentSession?.browserChannel ?? getPortalBrowserChannel()),
     persistentProfile: true,
     profileName: storageStateName(storageStatePath),
-    profileLocked: lock.locked,
-    profileLockPid: lock.pid,
+    profileLocked: !active && !opening && lock.locked,
+    profileLockPid: !active && !opening ? lock.pid : undefined,
     note: active
       ? "Portal browser session is active. Login cookies will be saved to local storage state when you search, capture, or close the portal."
+      : opening
+        ? "Dedicated portal browser is starting in the background. It will reuse the saved HEFAMAA profile and become available for search and capture shortly."
       : lock.locked
         ? `An old persistent portal profile is still open${lock.pid ? ` in process ${lock.pid}` : ""}, but the current agent now uses storage state instead.`
       : "Portal browser is closed. Opening it will reuse the saved storage state if the portal session is still valid.",
@@ -1694,5 +2191,85 @@ export async function openSearchResultRecord({ rowIndex }: OpenSearchResultInput
         ? `Opened the ${renewalSelection.currentRenewalYear} current renewal portal record${query ? ` for ${query}` : ""}.`
         : `Opened the latest available portal renewal record (${renewalSelection.selectedRenewalYear ?? "unknown year"})${query ? ` for ${query}` : ""}; no ${renewalSelection.currentRenewalYear} record was found.`,
     visibleTextPreview: openedText.slice(0, 800),
+  };
+}
+
+
+export async function captureCurrentPageText() {
+  const session = await getActiveSession();
+  const { page } = session;
+  const [bodyText, formFields, tables] = await Promise.all([
+    getVisibleText(page),
+    getVisibleFormFields(page),
+    getVisibleTables(page),
+  ]);
+  const selectedPortalRecord = inferPortalRecordFromCapture({
+    bodyText,
+    formFields,
+    tables,
+    renewalSelection: session.renewalSelection,
+  });
+  const currentRenewalYear = session.renewalSelection?.currentRenewalYear ?? getCurrentRenewalYear();
+  const latestAvailableRenewalYear =
+    session.renewalSelection?.latestAvailableRenewalYear ?? selectedPortalRecord?.renewalYear ?? null;
+  const selectedRenewalYear = session.renewalSelection?.selectedRenewalYear ?? selectedPortalRecord?.renewalYear ?? null;
+  const renewalStatus: PortalRenewalSelection["renewalStatus"] =
+    session.renewalSelection?.renewalStatus ??
+    (selectedRenewalYear === currentRenewalYear
+      ? "current_year"
+      : selectedRenewalYear
+        ? "latest_available_previous_year"
+        : "unknown_year");
+
+  await persistPortalStorageState(session);
+
+  return {
+    text: buildPortalSnapshotText({
+      bodyText,
+      formFields,
+      renewalSelection: session.renewalSelection,
+      tables,
+    }),
+    bodyText,
+    formFields,
+    tables,
+    currentRenewalYear,
+    latestAvailableRenewalYear,
+    selectedPortalRecord,
+    selectedRenewalYear,
+    renewalStatus,
+  };
+}
+
+export async function getCurrentPortalUrl() {
+  const session = await getActiveSession();
+  return session.page.url();
+}
+
+export async function closePortal() {
+  const session = getSession();
+
+  if (!session) {
+    return {
+      status: "closed",
+      persistentProfile: true,
+      profileLocked: false,
+      note: "Portal browser session is already closed.",
+    };
+  }
+
+  setSession(null);
+  portalRuntime.openingSession = null;
+  await closePortalSession(session);
+  const lock = getPortalProfileLock(session.profileDir);
+
+  return {
+    status: "closed",
+    persistentProfile: true,
+    profileLocked: lock.locked,
+    profileLockPid: lock.pid,
+    note: lock.locked
+      ? "Portal browser session closed, but the old profile lock is still present. Release the stale lock before opening again."
+      : "Portal browser session closed. Login cookies were saved locally for the next portal session.",
   };
 }

@@ -35,6 +35,7 @@ type PortalExtractionCardProps = {
   isClosing?: boolean;
   isReleasingLock?: boolean;
   isSearching?: boolean;
+  isScanning?: boolean;
   portalMessage?: string;
   portalUrl?: string | null;
   onCapture?: () => void;

@@ -1,11 +1,11 @@
 import { ok, fail } from "@/lib/apiResponse";
-import { scanAllPortalFacilities } from "@/lib/playwrightPortal";
+import { startPortalFacilityScan } from "@/lib/playwrightPortal";
 
 export const runtime = "nodejs";
 
 export async function POST() {
   try {
-    return ok(await scanAllPortalFacilities());
+    return ok(startPortalFacilityScan());
   } catch (error) {
     return fail(error, 500);
   }
