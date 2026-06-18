@@ -417,7 +417,7 @@ export function AssistantPanel() {
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="mb-4 flex items-center gap-2 text-[16px] font-bold text-slate-950">
           <Sparkles className="h-4 w-4 text-blue-600" />
-          AI Assistant
+          AI Assistance
         </h2>
 
         <div className="mb-4 rounded-lg bg-slate-100 px-4 py-4 text-[12px] leading-5 text-slate-700">
@@ -460,7 +460,7 @@ export function AssistantPanel() {
             Ask me anything
           </label>
           <input
-            className="h-10 min-w-0 flex-1 rounded-md border border-slate-200 px-3 text-[12px] text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+            className="h-10 min-w-0 flex-1 rounded-md border border-slate-200 px-3 text-[12px] text-slate-900 outline-none transition placeholder:text-slate-500 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             id="assistant-message"
             onChange={(event) => setQuestion(event.target.value)}
             placeholder="Ask me anything..."
@@ -469,7 +469,7 @@ export function AssistantPanel() {
           />
           <button
             aria-label="Send assistant message"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             disabled={isAsking || !question.trim()}
             type="submit"
           >
@@ -484,14 +484,14 @@ export function AssistantPanel() {
         ) : null}
 
         {result ? (
-          <div className="mt-3 rounded-lg border border-emerald-100 bg-emerald-50/70 p-3">
-            <p className="text-[11px] font-extrabold uppercase tracking-[0.03em] text-emerald-700">Answer</p>
+          <div className="mt-3 rounded-lg border border-blue-100 bg-blue-50/70 p-3">
+            <p className="text-[11px] font-extrabold uppercase tracking-[0.03em] text-blue-700">Answer</p>
             <p className="mt-2 text-[12px] font-bold leading-5 text-slate-950">{result.answer}</p>
 
             {rows.length ? (
               <div className="mt-3 space-y-2">
                 {rows.map((row, index) => (
-                  <div className="rounded-md border border-emerald-100 bg-white px-3 py-2" key={index}>
+                  <div className="rounded-md border border-blue-100 bg-white px-3 py-2" key={index}>
                     <p className="truncate text-[11px] font-extrabold text-slate-950">{rowTitle(row)}</p>
                     <p className="mt-1 truncate text-[10px] font-semibold text-slate-500">{rowMeta(row)}</p>
                   </div>
@@ -505,7 +505,7 @@ export function AssistantPanel() {
           <div className="mt-3 rounded-lg border border-amber-100 bg-amber-50/80 p-3">
             <div className="flex items-start gap-2">
               {cleaningUpdatedCells(cleaningResult) > 0 ? (
-                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
               ) : (
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               )}
@@ -572,7 +572,7 @@ export function AssistantPanel() {
             <div className="mt-3 flex gap-2">
               {canApplyCleaning ? (
                 <button
-                  className="flex h-9 flex-1 items-center justify-center gap-2 rounded-md bg-emerald-600 px-3 text-[11px] font-extrabold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="flex h-9 flex-1 items-center justify-center gap-2 rounded-md bg-blue-600 px-3 text-[11px] font-extrabold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                   disabled={isApplyingCleaning}
                   onClick={() => void applyCleaningFixes()}
                   type="button"

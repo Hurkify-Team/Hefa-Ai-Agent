@@ -108,7 +108,7 @@ export function PortalExtractionCard({
       ? "Current target: " + currentRenewalYear
       : "Unknown";
   const statusBadgeClass = /approved|current|registered/i.test(previewStatus)
-    ? "bg-emerald-100 text-emerald-700"
+    ? "bg-blue-100 text-blue-700"
     : "bg-amber-100 text-amber-800";
 
   return (
@@ -157,13 +157,13 @@ export function PortalExtractionCard({
         </div>
       </div>
 
-      <div className="mb-4 flex h-9 items-center gap-2 rounded-lg bg-emerald-50 px-4 text-[12px] font-bold text-emerald-700">
+      <div className="mb-4 flex h-9 items-center gap-2 rounded-lg bg-blue-50 px-4 text-[12px] font-bold text-blue-700">
         <CheckCircle2 className="h-4 w-4" />
         <span className="truncate">{portalMessage}</span>
       </div>
 
       {persistentProfile ? (
-        <div className="mb-4 rounded-lg border border-emerald-100 bg-emerald-50/70 px-4 py-3 text-[12px] font-semibold leading-5 text-emerald-800">
+        <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50/70 px-4 py-3 text-[12px] font-semibold leading-5 text-blue-800">
           Saved portal session enabled{profileName ? `: ${profileName}` : ""}. Manual login is reused until the
           portal expires the session.
         </div>
@@ -193,7 +193,7 @@ export function PortalExtractionCard({
           Facility name
         </label>
         <input
-          className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-[12px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+          className="h-10 rounded-lg border border-slate-200 bg-white px-3 text-[12px] font-semibold text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
           id="portal-facility-search"
           onChange={(event) => onFacilityNameChange?.(event.target.value)}
           placeholder="Search facility name on portal"
@@ -350,7 +350,7 @@ export function PortalExtractionCard({
           {isCapturing ? "Capturing..." : "Refresh Data"}
         </button>
         <button
-          className="flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-500 bg-emerald-50 text-[12px] font-bold text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+          className="flex h-10 items-center justify-center gap-2 rounded-lg border border-blue-500 bg-blue-50 text-[12px] font-bold text-blue-700 shadow-sm transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
           disabled={isCapturing}
           onClick={onCapture}
           type="button"

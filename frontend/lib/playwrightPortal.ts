@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { lookup } from "node:dns/promises";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { Browser, BrowserContext, Page } from "playwright";
@@ -81,14 +81,40 @@ type PortalFacilityStatus =
 
 type PortalApplicationType = "new_registration" | "renewal" | "unknown";
 type PortalFacilityType = "new_registration" | "existing_facility" | "unknown";
-type PortalScanStatus = "idle" | "running" | "completed" | "failed";
+type PortalScanStatus = "idle" | "running" | "completed" | "failed" | "cancelled";
+type PortalScanMode = "quick" | "full";
+type PortalScanEventStatus = "capturing" | "captured" | "skipped" | "failed" | "info";
+
+type PortalScanEvent = {
+  at: string;
+  category?: string;
+  detailIndex?: number;
+  detailTotal?: number;
+  error?: string;
+  facilityName?: string;
+  hefamaaId?: string;
+  id: string;
+  message: string;
+  status: PortalScanEventStatus;
+};
 
 type PortalScanProgress = {
   completedAt: string | null;
+  currentFacilityHefamaaId?: string | null;
+  currentFacilityName?: string | null;
+  detailTotal?: number;
   error?: string;
+  failedDetails?: number;
+  lastCapturedFacilityName?: string | null;
+  message?: string;
+  phase?: "starting" | "waiting_for_login" | "finding_facilities" | "indexing_list" | "capturing_details" | "completed";
   portalReportedRecords: number | null;
+  scanMode?: PortalScanMode;
+  recentEvents?: PortalScanEvent[];
+  scannedDetails?: number;
   scannedPages: number;
   scannedRecords: number;
+  skippedDetails?: number;
   startedAt: string | null;
   status: PortalScanStatus;
 };
@@ -99,12 +125,63 @@ export type PortalFacilityRecord = FacilitySearchResultRow & {
   lastSeen: string;
 };
 
+type PortalStaffDetail = {
+  matchedComplements: string[];
+  rowIndex: number;
+  tableIndex: number;
+  text: string;
+  values: string[];
+};
+
+export type PortalFacilityDetailRecord = {
+  applicationType: PortalApplicationType;
+  bodyText: string;
+  cacheKey: string;
+  capturedAt: string;
+  category: string;
+  facilityName: string;
+  fieldIndex: Record<string, string>;
+  formFields: VisibleFormField[];
+  hefamaaId: string;
+  normalizedStatus: PortalFacilityStatus;
+  recordDate?: string | null;
+  registrationStatus: string;
+  renewalYear: number | null;
+  sourceRecord: PortalFacilityRecord;
+  staffComplement: Record<string, number>;
+  staffDetails?: PortalStaffDetail[];
+  tables: string[][][];
+  text: string;
+  url: string;
+  visibleFields: Record<string, string>;
+};
+
+type JsonFileCache<T> = {
+  mtimeMs: number;
+  path: string;
+  value: T;
+};
+
+let portalFacilityListCache: JsonFileCache<PortalFacilityRecord[]> | null = null;
+let portalFacilityDetailsCache: JsonFileCache<PortalFacilityDetailRecord[]> | null = null;
+let portalFacilityExportCache: (JsonFileCache<PortalFacilityRecord[]> & { detailsMtimeMs: number; detailsPath: string }) | null = null;
+
+function fileMtimeMs(cachePath: string) {
+  try {
+    return existsSync(cachePath) ? statSync(cachePath).mtimeMs : 0;
+  } catch {
+    return 0;
+  }
+}
+
 type PortalFacilitySummary = {
   totalFacilities: number;
   totalPortalRecords: number;
   portalReportedRecords: number | null;
   categoryCounts: Array<{ category: string; count: number }>;
   categoryPortalRecordCounts: Array<{ category: string; count: number }>;
+  detailLastCaptured: string | null;
+  detailRecords: number;
   applicationTypeCounts: Record<PortalApplicationType, number>;
   facilityTypeCounts: Record<PortalFacilityType, number>;
   statusCounts: Record<PortalFacilityStatus, number>;
@@ -118,13 +195,71 @@ type PortalFacilitySummary = {
   note?: string;
 };
 
+let portalFacilitySummaryCache: (JsonFileCache<PortalFacilitySummary> & { detailsMtimeMs: number; detailsPath: string }) | null = null;
+
+function getFastPortalFacilitySummary() {
+  const cached = portalFacilitySummaryCache?.value;
+
+  if (cached) {
+    return {
+      ...cached,
+      detailRecords: Math.max(cached.detailRecords, portalRuntime.scanProgress.scannedDetails ?? 0),
+      portalReportedRecords: portalRuntime.scanProgress.portalReportedRecords ?? cached.portalReportedRecords,
+      scanProgress: portalRuntime.scanProgress,
+    } satisfies PortalFacilitySummary;
+  }
+
+  return {
+    totalFacilities: 0,
+    totalPortalRecords: 0,
+    portalReportedRecords: portalRuntime.scanProgress.portalReportedRecords ?? null,
+    categoryCounts: [],
+    categoryPortalRecordCounts: [],
+    detailLastCaptured: null,
+    detailRecords: portalRuntime.scanProgress.scannedDetails ?? 0,
+    applicationTypeCounts: {
+      new_registration: 0,
+      renewal: 0,
+      unknown: 0,
+    },
+    facilityTypeCounts: {
+      new_registration: 0,
+      existing_facility: 0,
+      unknown: 0,
+    },
+    statusCounts: {
+      document_queried: 0,
+      payment_queried: 0,
+      upload_payment_pending_document_approval: 0,
+      payment_approved_pending_document_approval: 0,
+      document_approved_inspection_pending: 0,
+      inspection_report_upload_pending_approval: 0,
+      final_approval_pending: 0,
+      registration_approved: 0,
+      waiting_to_onboard: 0,
+      unknown_status: 0,
+    },
+    scanProgress: portalRuntime.scanProgress,
+    lastScanned: null,
+    monthlyRegistrationCounts: [],
+    monthlyNewRegistrationCounts: [],
+    monthlyRenewalCounts: [],
+    yearlyPortalRecordCounts: [],
+    yearlyRenewalCounts: [],
+    note: "Portal scan stop acknowledged. Cached summary will refresh after the scan worker exits.",
+  } satisfies PortalFacilitySummary;
+}
+
 type PortalRuntimeStore = {
   cleanupHooksAttached: boolean;
+  closingSession: Promise<void> | null;
   dedicatedBrowserPid?: number;
+  keepAwakePid?: number;
   hostResolveCheckedAt: number;
   openingSession: Promise<PortalSession> | null;
   scanPromise: Promise<void> | null;
   scanProgress: PortalScanProgress;
+  scanStopRequested: boolean;
   session: PortalSession | null;
 };
 
@@ -136,14 +271,26 @@ const portalRuntime =
   globalPortalRuntime.__hefamaaPortalRuntime ??
   (globalPortalRuntime.__hefamaaPortalRuntime = {
     cleanupHooksAttached: false,
+    closingSession: null,
+    keepAwakePid: undefined,
     hostResolveCheckedAt: 0,
     openingSession: null,
     scanPromise: null,
+    scanStopRequested: false,
     scanProgress: {
       completedAt: null,
+      currentFacilityHefamaaId: null,
+      currentFacilityName: null,
+      detailTotal: 0,
+      failedDetails: 0,
+      lastCapturedFacilityName: null,
       portalReportedRecords: null,
+      recentEvents: [],
+      scanMode: "quick",
+      scannedDetails: 0,
       scannedPages: 0,
       scannedRecords: 0,
+      skippedDetails: 0,
       startedAt: null,
       status: "idle",
     },
@@ -151,16 +298,82 @@ const portalRuntime =
   });
 
 // Next.js hot reload can preserve the runtime object after new fields are added.
+portalRuntime.closingSession ??= null;
+portalRuntime.keepAwakePid ??= undefined;
 portalRuntime.openingSession ??= null;
 portalRuntime.scanPromise ??= null;
+portalRuntime.scanStopRequested ??= false;
 portalRuntime.scanProgress ??= {
   completedAt: null,
+  currentFacilityHefamaaId: null,
+  currentFacilityName: null,
+  detailTotal: 0,
+  failedDetails: 0,
+  lastCapturedFacilityName: null,
+  message: undefined,
+  phase: "starting",
   portalReportedRecords: null,
+  recentEvents: [],
+  scanMode: "quick",
+  scannedDetails: 0,
   scannedPages: 0,
   scannedRecords: 0,
+  skippedDetails: 0,
   startedAt: null,
   status: "idle",
 };
+portalRuntime.scanProgress.currentFacilityHefamaaId ??= null;
+portalRuntime.scanProgress.currentFacilityName ??= null;
+portalRuntime.scanProgress.failedDetails ??= 0;
+portalRuntime.scanProgress.lastCapturedFacilityName ??= null;
+portalRuntime.scanProgress.recentEvents ??= [];
+portalRuntime.scanProgress.skippedDetails ??= 0;
+
+function scanErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "Unknown portal scan error");
+}
+
+function createPortalScanEvent(input: Omit<PortalScanEvent, "at" | "id">): PortalScanEvent {
+  return {
+    ...input,
+    at: new Date().toISOString(),
+    id: Date.now() + "-" + Math.random().toString(36).slice(2),
+  };
+}
+
+function updatePortalScanProgress(patch: Partial<PortalScanProgress>) {
+  portalRuntime.scanProgress = {
+    ...portalRuntime.scanProgress,
+    ...patch,
+  };
+  portalFacilitySummaryCache = null;
+}
+
+function appendPortalScanEvent(input: Omit<PortalScanEvent, "at" | "id">) {
+  const event = createPortalScanEvent(input);
+  updatePortalScanProgress({
+    recentEvents: [event, ...(portalRuntime.scanProgress.recentEvents ?? [])].slice(0, 18),
+  });
+  return event;
+}
+
+function portalRecordDisplayName(record: Pick<PortalFacilityRecord, "facilityName" | "hefamaaId">) {
+  return cleanPortalText(record.facilityName) || cleanPortalText(record.hefamaaId) || "Unnamed facility";
+}
+
+function isPortalScanCancellationError(error: unknown) {
+  return portalRuntime.scanStopRequested || /scan cancelled|scan stopped|cancelled by user/i.test(scanErrorMessage(error));
+}
+
+function isPortalTargetClosedError(error: unknown) {
+  return /target page, context or browser has been closed|page, context or browser has been closed|browser has been closed|target closed/i.test(scanErrorMessage(error));
+}
+
+function throwIfPortalScanStopped() {
+  if (portalRuntime.scanStopRequested) {
+    throw new Error("Portal scan cancelled by user.");
+  }
+}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
   return Promise.race([
@@ -220,6 +433,42 @@ async function terminateProcess(pid: number | undefined, timeoutMs = 3_000) {
   }
 
   await waitForProcessExit(pid, timeoutMs);
+}
+
+function portalKeepAwakeEnabled() {
+  return process.platform === "darwin" && !/^(0|false|no)$/i.test(process.env.HEFAMAA_PORTAL_KEEP_AWAKE?.trim() ?? "true");
+}
+
+function startPortalScanKeepAwake(mode: PortalScanMode) {
+  if (mode !== "full" || !portalKeepAwakeEnabled()) return;
+
+  const existingPid = portalRuntime.keepAwakePid;
+  if (existingPid && isProcessRunning(existingPid)) return;
+
+  try {
+    // A full detail scan is long-running. Keep macOS awake so screen lock or idle sleep
+    // does not freeze Chromium/CDP midway through a resumable capture.
+    const child = spawn("caffeinate", ["-dimsu"], { detached: true, stdio: "ignore" });
+    child.unref();
+    portalRuntime.keepAwakePid = child.pid;
+    appendPortalScanEvent({
+      message: "Mac keep-awake guard started for Full Detail Scan.",
+      status: "info",
+    });
+  } catch (error) {
+    appendPortalScanEvent({
+      error: scanErrorMessage(error),
+      message: "Unable to start the macOS keep-awake guard. The scan can continue, but system sleep may pause it.",
+      status: "failed",
+    });
+  }
+}
+
+async function stopPortalScanKeepAwake() {
+  const pid = portalRuntime.keepAwakePid;
+  portalRuntime.keepAwakePid = undefined;
+  if (!pid) return;
+  await terminateProcess(pid, 1_500);
 }
 
 async function persistPortalStorageState(session: PortalSession) {
@@ -306,18 +555,25 @@ function storageStateName(storageStatePath: string) {
   return path.relative(process.cwd(), storageStatePath) || storageStatePath;
 }
 
+function getRecoveryPortalProfileDir(profileDir = getPortalProfileDir()) {
+  return profileDir + "-recovery";
+}
+
 function getPortalBrowserChannel() {
   const configuredChannel = process.env.HEFAMAA_PORTAL_BROWSER_CHANNEL?.trim();
 
   if (!configuredChannel) {
-    return "chrome";
+    return undefined;
   }
 
   return /^(bundled|playwright|chromium)$/i.test(configuredChannel) ? undefined : configuredChannel;
 }
 
 function browserChannelLabel(channel: string | undefined | null) {
-  return channel || "bundled Playwright Chromium";
+  if (channel) return channel;
+  const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  if (existsSync(process.env.HEFAMAA_PORTAL_BROWSER_EXECUTABLE?.trim() || macChrome)) return "Google Chrome";
+  return "bundled Playwright Chromium";
 }
 
 function getPortalDebuggingPort() {
@@ -328,6 +584,9 @@ function getPortalDebuggingPort() {
 function getPortalChromeExecutable(defaultExecutable: string) {
   const configuredExecutable = process.env.HEFAMAA_PORTAL_BROWSER_EXECUTABLE?.trim();
   if (configuredExecutable) return configuredExecutable;
+
+  const forceBundled = /^(1|true|yes)$/i.test(process.env.HEFAMAA_PORTAL_USE_BUNDLED_CHROMIUM?.trim() ?? "");
+  if (forceBundled) return defaultExecutable;
 
   const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
   return existsSync(macChrome) ? macChrome : defaultExecutable;
@@ -386,6 +645,54 @@ function portalProfileLockedError(lock: PortalProfileLock, profileDir: string) {
   );
 }
 
+function isTimeoutError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /Timeout|Timed out/i.test(message);
+}
+
+function clearPortalSingletonFiles(profileDir: string) {
+  for (const lockFile of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
+    rmSync(path.join(profileDir, lockFile), { force: true });
+  }
+}
+
+function hasPortalSingletonFiles(profileDir: string) {
+  return ["SingletonLock", "SingletonSocket", "SingletonCookie"].some((lockFile) => existsSync(path.join(profileDir, lockFile)));
+}
+
+async function terminateChromeProcessesForProfile(profileDir: string) {
+  await new Promise<void>((resolve) => {
+    const child = spawn("pkill", ["-f", "--user-data-dir=" + profileDir], { stdio: "ignore" });
+    const timer = setTimeout(resolve, 1_500);
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+}
+
+async function resetStuckDedicatedPortalBrowser(profileDir: string) {
+  const lock = getPortalProfileLock(profileDir);
+  if (lock.pid) {
+    await terminateProcess(lock.pid, 2_000);
+  }
+
+  // Chrome can survive a sleep/wake crash without leaving a reliable SingletonLock PID.
+  // Kill only Chrome processes using this exact HEFAMAA profile before reopening it.
+  await terminateChromeProcessesForProfile(profileDir);
+
+  const afterTermLock = getPortalProfileLock(profileDir);
+  if (!afterTermLock.locked) {
+    clearPortalSingletonFiles(profileDir);
+  }
+
+  portalRuntime.dedicatedBrowserPid = undefined;
+}
+
 export async function releasePortalProfileLock(options: ReleasePortalProfileLockOptions = {}) {
   const currentSession = getSession();
 
@@ -419,9 +726,7 @@ export async function releasePortalProfileLock(options: ReleasePortalProfileLock
   const nextLock = getPortalProfileLock(profileDir);
 
   if (!nextLock.locked) {
-    for (const lockFile of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
-      rmSync(path.join(profileDir, lockFile), { force: true });
-    }
+    clearPortalSingletonFiles(profileDir);
   }
 
   const finalLock = getPortalProfileLock(profileDir);
@@ -455,6 +760,152 @@ function isPortalPage(page: Page) {
 
 function getFacilitiesUrl() {
   return new URL("/exec/facilities", getPortalUrl()).toString();
+}
+
+function getPortalHomeUrl() {
+  return new URL("/exec/home", getPortalUrl()).toString();
+}
+
+function getFacilityRouteCandidateUrls() {
+  return Array.from(new Set([
+    getFacilitiesUrl(),
+    new URL("/exec/facility", getPortalUrl()).toString(),
+    new URL("/exec/all-facilities", getPortalUrl()).toString(),
+    new URL("/exec/applications", getPortalUrl()).toString(),
+    new URL("/exec/registration", getPortalUrl()).toString(),
+    new URL("/exec/registrations", getPortalUrl()).toString(),
+  ]));
+}
+
+async function pageHasFacilitiesGrid(page: Page) {
+  return (await page.locator("#mainGrid").count().catch(() => 0)) > 0;
+}
+
+async function isPortalLoginScreen(page: Page) {
+  const url = page.url().toLowerCase();
+  if (url.includes("/login")) return true;
+
+  const title = (await page.title().catch(() => "")).toLowerCase();
+  if (title.includes("login")) return true;
+
+  const body = (await page.locator("body").innerText({ timeout: 2_000 }).catch(() => "")).toLowerCase();
+  return body.includes("facility registration portal") && body.includes("email") && body.includes("password") && body.includes("login");
+}
+async function waitForManualPortalLogin(page: Page, timeoutMs = 120_000) {
+  if (!(await isPortalLoginScreen(page))) return;
+
+  updatePortalScanProgress({
+    error: undefined,
+    message: "Waiting for manual HEFAMAA portal login in the opened browser window.",
+    phase: "waiting_for_login",
+    status: "running",
+  });
+
+  await page.bringToFront().catch(() => undefined);
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    throwIfPortalScanStopped();
+    await page.waitForTimeout(1_000).catch(() => undefined);
+    throwIfPortalScanStopped();
+    if (!(await isPortalLoginScreen(page))) {
+      await page.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => undefined);
+      updatePortalScanProgress({
+        message: "Portal login detected. Looking for the facilities table...",
+        phase: "finding_facilities",
+      });
+      return;
+    }
+  }
+
+  throw new Error("HEFAMAA portal is still on the login screen. Log in inside the opened portal browser window, wait for the dashboard to load, then run Full Detail Scan again.");
+}
+
+async function collectFacilityNavigationHrefs(page: Page) {
+  return page.evaluate(() => {
+    const origin = window.location.origin;
+    return Array.from(document.querySelectorAll("a[href]"))
+      .map((anchor) => {
+        const element = anchor as HTMLAnchorElement;
+        const text = (element.textContent || "").replace(/\s+/g, " ").trim();
+        const href = element.href;
+        return { href, text };
+      })
+      .filter((link) => link.href.startsWith(origin))
+      .filter((link) => /facilit|registration|application/i.test(link.text + " " + link.href))
+      .map((link) => link.href);
+  }).catch(() => [] as string[]);
+}
+
+async function clickFacilityNavigationCandidate(page: Page) {
+  const candidates = page.locator([
+    'a:has-text("Facilities")',
+    'a:has-text("Facility")',
+    'a:has-text("Applications")',
+    'a:has-text("Registration")',
+    'button:has-text("Facilities")',
+    'button:has-text("Facility")',
+    '[role="button"]:has-text("Facilities")',
+    '[role="button"]:has-text("Facility")',
+  ].join(", "));
+  const count = await candidates.count().catch(() => 0);
+
+  for (let index = 0; index < Math.min(count, 20); index += 1) {
+    const candidate = candidates.nth(index);
+    if (!(await candidate.isVisible().catch(() => false))) continue;
+
+    const beforeUrl = page.url();
+    await candidate.click().catch(() => undefined);
+    await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
+    await page.waitForTimeout(800).catch(() => undefined);
+    await waitForManualPortalLogin(page, 120_000);
+    if (await pageHasFacilitiesGrid(page)) return true;
+
+    if (page.url() !== beforeUrl) {
+      await page.goBack({ waitUntil: "domcontentloaded", timeout: 10_000 }).catch(() => undefined);
+      await page.waitForTimeout(500).catch(() => undefined);
+    }
+  }
+
+  return false;
+}
+
+async function openFacilitiesGrid(page: Page) {
+  await waitForManualPortalLogin(page, 120_000);
+
+  if (await pageHasFacilitiesGrid(page)) return;
+
+  updatePortalScanProgress({
+    message: "Opening the HEFAMAA facilities table...",
+    phase: "finding_facilities",
+  });
+
+  const routeCandidates = getFacilityRouteCandidateUrls();
+  for (const url of routeCandidates) {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    await page.waitForTimeout(800).catch(() => undefined);
+    await waitForManualPortalLogin(page, 120_000);
+    if (await pageHasFacilitiesGrid(page)) return;
+  }
+
+  await page.goto(getPortalHomeUrl(), { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+  await page.waitForTimeout(800).catch(() => undefined);
+  await waitForManualPortalLogin(page, 120_000);
+  if (await pageHasFacilitiesGrid(page)) return;
+
+  const hrefs = Array.from(new Set(await collectFacilityNavigationHrefs(page)));
+  for (const href of hrefs) {
+    await page.goto(href, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => undefined);
+    await page.waitForTimeout(800).catch(() => undefined);
+    await waitForManualPortalLogin(page, 120_000);
+    if (await pageHasFacilitiesGrid(page)) return;
+  }
+
+  if (await clickFacilityNavigationCandidate(page)) return;
+
+  const title = await page.title().catch(() => "HEFAMAA portal");
+  const currentUrl = page.url();
+  throw new Error("The HEFAMAA facilities table is not visible on " + title + " (" + currentUrl + "). Open the Facilities page in the portal browser, then run Full Detail Scan again.");
 }
 
 function getCurrentRenewalYear() {
@@ -521,7 +972,7 @@ function choosePortalPage(context: BrowserContext, preferredPage?: Page | null) 
     return preferred;
   }
 
-  return pages.find(isPortalPage) ?? preferred ?? pages.find((page) => !isBlankOrNewTab(page)) ?? pages[0] ?? null;
+  return pages.find(isPortalPage) ?? pages.find((page) => !isBlankOrNewTab(page)) ?? preferred ?? pages[0] ?? null;
 }
 
 async function waitForInitialPage(context: BrowserContext, timeoutMs: number) {
@@ -540,6 +991,11 @@ async function waitForInitialPage(context: BrowserContext, timeoutMs: number) {
   return null;
 }
 
+function isUnsupportedCdpContextError(error: unknown) {
+  const message = scanErrorMessage(error);
+  return /Browser\.setDownloadBehavior|Browser context management is not supported/i.test(message);
+}
+
 async function launchPersistentPortalContext(profileDir: string) {
   const { chromium } = await import("playwright");
   const browserChannel = getPortalBrowserChannel();
@@ -548,43 +1004,178 @@ async function launchPersistentPortalContext(profileDir: string) {
   mkdirSync(profileDir, { recursive: true });
   mkdirSync(path.dirname(storageStatePath), { recursive: true });
 
-  try {
-    if (!(await portalDebuggingEndpointReady(debuggingPort))) {
-      const lock = getPortalProfileLock(profileDir);
-      if (lock.locked) throw portalProfileLockedError(lock, profileDir);
-
-      const executable = getPortalChromeExecutable(chromium.executablePath());
-      const child = spawn(
-        executable,
-        [
-          `--remote-debugging-port=${debuggingPort}`,
-          `--user-data-dir=${profileDir}`,
-          "--start-maximized",
-          "--no-first-run",
-          "--no-default-browser-check",
-          "--disable-infobars",
-          "--disable-popup-blocking",
-          "--disable-blink-features=AutomationControlled",
-          getPortalUrl(),
-        ],
-        { detached: true, stdio: "ignore" },
-      );
-      child.unref();
-      portalRuntime.dedicatedBrowserPid = child.pid;
-      await waitForPortalDebuggingEndpoint(debuggingPort);
-    }
-
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${debuggingPort}`, { timeout: 5_000 });
+  async function connectToDedicatedBrowser(activeProfileDir = profileDir) {
+    const browser = await chromium.connectOverCDP("http://127.0.0.1:" + debuggingPort, { timeout: 15_000 });
     const context = browser.contexts()[0];
     if (!context) throw new Error("Dedicated HEFAMAA portal browser opened without an accessible browser context.");
+    return { browser, browserChannel, context, profileDir: activeProfileDir, storageStatePath };
+  }
 
-    return { browser, browserChannel, context, storageStatePath };
+  async function launchManagedPersistentContext(activeProfileDir = profileDir) {
+    mkdirSync(activeProfileDir, { recursive: true });
+    const lock = getPortalProfileLock(activeProfileDir);
+    if (lock.locked) {
+      await resetStuckDedicatedPortalBrowser(activeProfileDir);
+      const nextLock = getPortalProfileLock(activeProfileDir);
+      if (nextLock.locked) throw portalProfileLockedError(nextLock, activeProfileDir);
+    } else if (hasPortalSingletonFiles(activeProfileDir)) {
+      // Chrome can leave Singleton* symlinks behind after a crash or forced close.
+      // If the PID is already dead, the files are stale and block the next persistent launch.
+      clearPortalSingletonFiles(activeProfileDir);
+    }
+
+    const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
+      acceptDownloads: true,
+      args: [
+        "--start-maximized",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-infobars",
+        "--disable-popup-blocking",
+        "--disable-blink-features=AutomationControlled",
+        "--ignore-certificate-errors",
+        "--allow-insecure-localhost",
+      ],
+      headless: false,
+      ignoreHTTPSErrors: true,
+      timeout: 60_000,
+      viewport: null,
+    };
+
+    if (browserChannel) {
+      launchOptions.channel = browserChannel;
+    } else {
+      launchOptions.executablePath = getPortalChromeExecutable(chromium.executablePath());
+    }
+
+    const context = await chromium.launchPersistentContext(activeProfileDir, launchOptions);
+    const page = choosePortalPage(context) ?? (await context.newPage());
+    await navigateToPortal(page, { fast: true }).catch(() => undefined);
+    await page.bringToFront().catch(() => undefined);
+    portalRuntime.dedicatedBrowserPid = undefined;
+    return { browser: context.browser(), browserChannel, context, profileDir: activeProfileDir, storageStatePath };
+  }
+
+  async function launchManagedPersistentContextWithRecovery() {
+    try {
+      return await launchManagedPersistentContext(profileDir);
+    } catch (error) {
+      if (!isTimeoutError(error)) throw error;
+
+      await resetStuckDedicatedPortalBrowser(profileDir).catch(() => undefined);
+      clearPortalSingletonFiles(profileDir);
+      const recoveryProfileDir = getRecoveryPortalProfileDir(profileDir);
+      await resetStuckDedicatedPortalBrowser(recoveryProfileDir).catch(() => undefined);
+      clearPortalSingletonFiles(recoveryProfileDir);
+      appendPortalScanEvent({
+        error: scanErrorMessage(error),
+        message: "Primary portal browser profile timed out. Opening a clean recovery profile so the scan can continue after login.",
+        status: "info",
+      });
+      return await launchManagedPersistentContext(recoveryProfileDir);
+    }
+  }
+
+  async function spawnDedicatedBrowser(activeProfileDir = profileDir) {
+    const lock = getPortalProfileLock(activeProfileDir);
+    if (lock.locked) throw portalProfileLockedError(lock, activeProfileDir);
+
+    const executable = getPortalChromeExecutable(chromium.executablePath());
+    const child = spawn(
+      executable,
+      [
+        "--remote-debugging-port=" + debuggingPort,
+        "--user-data-dir=" + activeProfileDir,
+        "--start-maximized",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--disable-infobars",
+        "--disable-popup-blocking",
+        "--disable-blink-features=AutomationControlled",
+        "--ignore-certificate-errors",
+        "--allow-insecure-localhost",
+        getPortalUrl(),
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    child.unref();
+    portalRuntime.dedicatedBrowserPid = child.pid;
+    await waitForPortalDebuggingEndpoint(debuggingPort, 60_000);
+  }
+
+  async function launchDedicatedBrowserWithRecovery() {
+    try {
+      await spawnDedicatedBrowser(profileDir);
+      return await connectToDedicatedBrowser(profileDir);
+    } catch (error) {
+      await resetStuckDedicatedPortalBrowser(profileDir).catch(() => undefined);
+      clearPortalSingletonFiles(profileDir);
+      const recoveryProfileDir = getRecoveryPortalProfileDir(profileDir);
+      await resetStuckDedicatedPortalBrowser(recoveryProfileDir).catch(() => undefined);
+      clearPortalSingletonFiles(recoveryProfileDir);
+      appendPortalScanEvent({
+        error: scanErrorMessage(error),
+        message: "Primary portal browser could not be controlled. Opening a clean Google Chrome recovery profile so the scan can continue after login.",
+        status: "info",
+      });
+      await spawnDedicatedBrowser(recoveryProfileDir);
+      return await connectToDedicatedBrowser(recoveryProfileDir);
+    }
+  }
+
+  try {
+    if (await portalDebuggingEndpointReady(debuggingPort)) {
+      try {
+        return await connectToDedicatedBrowser();
+      } catch (error) {
+        if (isUnsupportedCdpContextError(error)) {
+          appendPortalScanEvent({
+            error: scanErrorMessage(error),
+            message: "Existing portal browser rejected Playwright reconnect. Restarting Google Chrome and resuming from cache.",
+            status: "info",
+          });
+          await resetStuckDedicatedPortalBrowser(profileDir);
+          return await launchDedicatedBrowserWithRecovery();
+        }
+
+        if (!isTimeoutError(error)) throw error;
+        await resetStuckDedicatedPortalBrowser(profileDir);
+      }
+    }
+
+    // Prefer a dedicated browser with a debugging port because it opens quickly and avoids
+    // the persistent-context startup hang that can leave Chrome on about:blank.
+    if (!(await portalDebuggingEndpointReady(debuggingPort))) {
+      try {
+        await spawnDedicatedBrowser();
+        return await connectToDedicatedBrowser();
+      } catch (error) {
+        await resetStuckDedicatedPortalBrowser(profileDir).catch(() => undefined);
+        if (!isTimeoutError(error) && !isUnsupportedCdpContextError(error)) throw error;
+        appendPortalScanEvent({
+          error: scanErrorMessage(error),
+          message: "Dedicated portal browser was not controllable. Restarting Google Chrome with a clean recovery profile.",
+          status: "info",
+        });
+        return await launchDedicatedBrowserWithRecovery();
+      }
+    }
+
+    try {
+      return await connectToDedicatedBrowser();
+    } catch (error) {
+      await resetStuckDedicatedPortalBrowser(profileDir).catch(() => undefined);
+      if (isUnsupportedCdpContextError(error) || isTimeoutError(error)) {
+        return await launchDedicatedBrowserWithRecovery();
+      }
+      throw error;
+    }
   } catch (error) {
-    const message = error instanceof Error ? error.message : "";
-
-    if (/Timeout|Timed out/i.test(message)) {
+    if (isTimeoutError(error)) {
+      await resetStuckDedicatedPortalBrowser(profileDir).catch(() => undefined);
+      clearPortalSingletonFiles(profileDir);
       throw new Error(
-        `Timed out opening the dedicated HEFAMAA portal browser with ${browserChannelLabel(browserChannel)}. Close an old HEFAMAA portal window or release the profile lock, then try again.`,
+        "Timed out opening the HEFAMAA portal browser with " + browserChannelLabel(browserChannel) + ". Chrome profile files were cleared automatically. Close any stuck HEFAMAA Chrome window, then try Full Detail Scan again; already captured facilities will be skipped.",
       );
     }
 
@@ -592,19 +1183,49 @@ async function launchPersistentPortalContext(profileDir: string) {
   }
 }
 
-async function ensureSession(options: { fastOpen?: boolean } = {}) {
-  const currentSession = getSession();
+async function isPortalSessionHealthy(session: PortalSession, timeoutMs = 1_500) {
+  if (!session.context || !session.page || session.page.isClosed()) return false;
 
-  if (currentSession && !currentSession.page.isClosed()) {
-    return currentSession;
+  try {
+    await withTimeout(
+      session.page.evaluate(() => document.readyState),
+      timeoutMs,
+      "Portal browser session health check timed out.",
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function discardStalePortalSession(session: PortalSession, reason: string) {
+  setSession(null);
+  portalRuntime.openingSession = null;
+  appendPortalScanEvent({
+    message: reason,
+    status: "info",
+  });
+  await closePortalSession(session, 2_500).catch(() => undefined);
+}
+
+async function createPortalSession(options: { fastOpen?: boolean } = {}) {
+  const closingSession = portalRuntime.closingSession;
+  if (closingSession) {
+    await withTimeout(closingSession, 4_000, "Previous HEFAMAA portal browser is still closing; retrying with a clean launch.").catch(() => undefined);
   }
 
   const profileDir = getPortalProfileDir();
   let browser: Browser | null = null;
   let context: BrowserContext | null = null;
 
-  if (!options.fastOpen) {
-    await verifyPortalHostResolves();
+  if (!options.fastOpen && !(await portalDebuggingEndpointReady(getPortalDebuggingPort()))) {
+    await verifyPortalHostResolves().catch((error) => {
+      const message = error instanceof Error ? error.message : "Unable to verify the HEFAMAA portal host before opening the browser.";
+      updatePortalScanProgress({
+        error: undefined,
+        message,
+      });
+    });
   }
 
   try {
@@ -633,7 +1254,7 @@ async function ensureSession(options: { fastOpen?: boolean } = {}) {
       browserChannel: launched.browserChannel,
       context,
       page,
-      profileDir,
+      profileDir: launched.profileDir,
       storageStatePath: launched.storageStatePath,
     };
     setSession(nextSession);
@@ -643,10 +1264,12 @@ async function ensureSession(options: { fastOpen?: boolean } = {}) {
       process.once("SIGINT", () => {
         const session = getSession();
         if (session) void closePortalSession(session);
+        void stopPortalScanKeepAwake();
       });
       process.once("SIGTERM", () => {
         const session = getSession();
         if (session) void closePortalSession(session);
+        void stopPortalScanKeepAwake();
       });
     }
 
@@ -665,8 +1288,46 @@ async function ensureSession(options: { fastOpen?: boolean } = {}) {
   }
 }
 
+async function ensureSession(options: { fastOpen?: boolean } = {}) {
+  const currentSession = getSession();
+
+  if (currentSession) {
+    if (await isPortalSessionHealthy(currentSession, options.fastOpen ? 900 : 1_800)) {
+      return currentSession;
+    }
+
+    await discardStalePortalSession(
+      currentSession,
+      "Stale HEFAMAA portal browser session detected. Reconnecting Chrome once and resuming from cached scan progress.",
+    );
+  }
+
+  const existingOpening = portalRuntime.openingSession;
+  if (existingOpening) {
+    return existingOpening;
+  }
+
+  const openingSession = createPortalSession(options);
+  portalRuntime.openingSession = openingSession;
+
+  try {
+    return await openingSession;
+  } finally {
+    if (portalRuntime.openingSession === openingSession) {
+      portalRuntime.openingSession = null;
+    }
+  }
+}
 async function openPortalTab(options: { fastOpen?: boolean } = {}) {
   const currentSession = getSession();
+
+  if (currentSession && !(await isPortalSessionHealthy(currentSession, options.fastOpen ? 900 : 1_800))) {
+    await discardStalePortalSession(
+      currentSession,
+      "Stale HEFAMAA portal browser session detected while opening the portal. Reconnecting Chrome once.",
+    );
+    return ensureSession({ fastOpen: options.fastOpen });
+  }
 
   if (currentSession) {
     const activePage = choosePortalPage(currentSession.context, currentSession.page);
@@ -688,7 +1349,6 @@ async function openPortalTab(options: { fastOpen?: boolean } = {}) {
 
   return ensureSession({ fastOpen: options.fastOpen });
 }
-
 async function getActiveSession() {
   const openingSession = portalRuntime.openingSession;
   if (!getSession() && openingSession) {
@@ -701,24 +1361,53 @@ async function getActiveSession() {
 
   const currentSession = getSession();
 
-  if (currentSession) {
-    const activePage = currentSession.page && !currentSession.page.isClosed()
-      ? currentSession.page
-      : currentSession.context.pages().find((page) => !page.isClosed()) ?? null;
+  if (currentSession && !(await isPortalSessionHealthy(currentSession, 1_200))) {
+    await discardStalePortalSession(
+      currentSession,
+      "Stale HEFAMAA portal browser session detected while checking the active portal. Reconnect before continuing.",
+    );
+  }
+
+  const healthySession = getSession();
+
+  if (healthySession) {
+    const activePage = choosePortalPage(healthySession.context, healthySession.page);
 
     if (activePage) {
-      currentSession.page = activePage;
+      activePage.setDefaultTimeout(15_000);
+
+      if (isBlankOrNewTab(activePage) || !isPortalPage(activePage)) {
+        await navigateToPortal(activePage, { fast: true }).catch(() => undefined);
+      }
+
+      void closeExtraBlankTabs(healthySession.context, activePage).catch(() => undefined);
+      healthySession.page = activePage;
       await activePage.bringToFront().catch(() => undefined);
-      setSession(currentSession);
-      return currentSession;
+      setSession(healthySession);
+      return healthySession;
     }
   }
 
   throw new Error("Portal browser session is not active. Click Open HEFAMAA Portal, log in if needed, then search or capture.");
 }
-
 async function getVisibleText(page: Page) {
-  return page.locator("body").innerText({ timeout: 15_000 });
+  await page.waitForLoadState("domcontentloaded", { timeout: 3_000 }).catch(() => undefined);
+
+  // Direct DOM reads are much faster than locator.innerText on heavy portal pages.
+  const quickText = await page.evaluate(() => document.body?.innerText || document.documentElement?.innerText || "").catch(() => "");
+  if (quickText.replace(/\s+/g, " ").trim()) return quickText;
+
+  await page.locator("body").waitFor({ state: "attached", timeout: 3_000 }).catch(() => undefined);
+
+  try {
+    return await page.locator("body").innerText({ timeout: 5_000 });
+  } catch (error) {
+    await page.waitForTimeout(500).catch(() => undefined);
+    const retryText = await page.evaluate(() => document.body?.innerText || document.documentElement?.innerText || "").catch(() => "");
+    if (retryText.replace(/\s+/g, " ").trim()) return retryText;
+
+    throw error;
+  }
 }
 
 async function getVisibleFormFields(page: Page): Promise<VisibleFormField[]> {
@@ -1027,6 +1716,45 @@ async function firstVisibleFacilitySearchInput(page: Page) {
   return null;
 }
 
+async function waitForDataTableIdle(page: Page, timeoutMs = 6_000) {
+  await page.waitForFunction(
+    () => {
+      const processing = document.querySelector<HTMLElement>("#mainGrid_processing, .dataTables_processing");
+      if (!processing) return true;
+      const style = window.getComputedStyle(processing);
+      return style.display === "none" || style.visibility === "hidden" || processing.offsetParent === null;
+    },
+    null,
+    { timeout: timeoutMs },
+  ).catch(() => undefined);
+}
+
+async function fillFacilitySearchInput(page: Page, input: ReturnType<Page["locator"]>, query: string) {
+  await waitForDataTableIdle(page, 4_000);
+
+  try {
+    await input.scrollIntoViewIfNeeded({ timeout: 1_000 }).catch(() => undefined);
+    await input.click({ timeout: 1_500 });
+    await input.fill("", { timeout: 1_500 });
+    await input.fill(query, { timeout: 2_500 });
+    return true;
+  } catch {
+    // The HEFAMAA grid sometimes leaves the search input visible but temporarily not editable.
+    // Direct DOM assignment is faster than burning a full Playwright timeout, and still triggers the same input/change events.
+  }
+
+  return input.evaluate((element, value) => {
+    const inputElement = element as HTMLInputElement;
+    if (inputElement.disabled || inputElement.readOnly) return false;
+    inputElement.focus();
+    inputElement.value = value;
+    inputElement.dispatchEvent(new Event("input", { bubbles: true }));
+    inputElement.dispatchEvent(new Event("change", { bubbles: true }));
+    inputElement.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+    return true;
+  }, query).catch(() => false);
+}
+
 async function clickSearchButtonIfAvailable(page: Page) {
   const buttons = page.locator(
     [
@@ -1056,19 +1784,13 @@ async function clickSearchButtonIfAvailable(page: Page) {
 }
 
 async function openFacilitiesSearchPage(page: Page) {
-  const facilitiesUrl = getFacilitiesUrl();
-  const isFacilitiesPage = page.url().startsWith(facilitiesUrl);
-  const existingInput = isFacilitiesPage ? await firstVisibleFacilitySearchInput(page) : null;
+  const existingInput = await firstVisibleFacilitySearchInput(page);
 
-  if (existingInput) {
+  if (existingInput && (await pageHasFacilitiesGrid(page))) {
     return existingInput;
   }
 
-  await page.goto(facilitiesUrl, {
-    waitUntil: "domcontentloaded",
-    timeout: 30_000,
-  });
-  await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
+  await openFacilitiesGrid(page);
   await page.waitForSelector("#mainGrid-search-txt, input[placeholder*='Search' i], input[type='search']", {
     timeout: 20_000,
   }).catch(() => undefined);
@@ -1076,19 +1798,27 @@ async function openFacilitiesSearchPage(page: Page) {
   return firstVisibleFacilitySearchInput(page);
 }
 
-async function waitForFacilitySearchResults(page: Page, query: string) {
-  await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => undefined);
+async function waitForFacilitySearchResults(page: Page, query: string, previousFingerprint = "") {
+  await page.waitForLoadState("domcontentloaded", { timeout: 2_500 }).catch(() => undefined);
   await page.waitForFunction(
-    () => !document.body.innerText.toLowerCase().includes("processing..."),
-    null,
-    { timeout: 20_000 },
+    ({ previousFingerprint, query }) => {
+      const processing = document.querySelector<HTMLElement>("#mainGrid_processing, .dataTables_processing");
+      const processingVisible = processing
+        ? window.getComputedStyle(processing).display !== "none" && processing.offsetParent !== null
+        : false;
+      const fingerprint = document.querySelector("#mainGrid tbody")?.textContent?.replace(/\s+/g, " ").trim() ?? "";
+      const body = document.body?.innerText?.toLowerCase() ?? "";
+      const queryText = String(query || "").toLowerCase();
+      const queryVisible = Boolean(queryText) && body.includes(queryText);
+      const noMatch = /no matching|no records|no data available/i.test(body);
+
+      return !processingVisible && (queryVisible || noMatch || (Boolean(fingerprint) && fingerprint !== previousFingerprint));
+    },
+    { previousFingerprint, query },
+    { timeout: 3_500 },
   ).catch(() => undefined);
-  await page.waitForFunction(
-    (facilityName) => document.body.innerText.toLowerCase().includes(String(facilityName).toLowerCase()),
-    query,
-    { timeout: 20_000 },
-  ).catch(() => undefined);
-  await page.waitForTimeout(800);
+  await waitForDataTableIdle(page, 1_800);
+  await page.waitForTimeout(120);
 }
 
 async function getFacilityResultRows(page: Page) {
@@ -1263,8 +1993,122 @@ function inferPortalApplicationType(record: FacilitySearchResultRow, normalizedS
   return "unknown";
 }
 
+const FACILITY_ADDRESS_FIELD_ALIASES = [
+  "address",
+  "facility address",
+  "location",
+  "premises",
+  "site address",
+  "operational address",
+];
+
+const FACILITY_BRANCH_FIELD_ALIASES = [
+  "branch",
+  "annex",
+  "branch name",
+  "annex name",
+  "location name",
+];
+
+const FACILITY_BRANCH_PATTERN = /\b(?:annex|branch|satellite|extension|outstation|site\s*\d+)\b/i;
+
+function portalVisibleFieldValue(record: Pick<FacilitySearchResultRow, "visibleFields">, aliases: string[]) {
+  const fields = record.visibleFields ?? {};
+
+  for (const [header, value] of Object.entries(fields)) {
+    const normalizedHeader = normalizeSelectionName(header);
+    if (!aliases.some((alias) => normalizedHeader.includes(normalizeSelectionName(alias)))) continue;
+
+    const cleanValue = cleanPortalText(value);
+    if (cleanValue) return cleanValue;
+  }
+
+  return "";
+}
+
+function stablePortalIdKey(value: string) {
+  return normalizeSelectionName(value)
+    .replace(/\b20\d{2}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function facilityRecordAddressKey(record: FacilitySearchResultRow) {
+  if (record.visibleFields?.["Detail Captured At"]) return "";
+  const address = portalVisibleFieldValue(record, FACILITY_ADDRESS_FIELD_ALIASES);
+  return address ? normalizeSelectionName(address) : "";
+}
+
+function facilityRecordBranchKey(record: FacilitySearchResultRow) {
+  const explicitBranch = portalVisibleFieldValue(record, FACILITY_BRANCH_FIELD_ALIASES);
+  if (explicitBranch) return normalizeSelectionName(explicitBranch);
+
+  const markerText = [record.facilityName, record.category, record.text].filter(Boolean).join(" ");
+  const parentheticalBranch = markerText.match(/\(([^)]*(?:annex|branch|satellite|extension|outstation|site\s*\d+)[^)]*)\)/i)?.[1] ?? "";
+  if (parentheticalBranch) return normalizeSelectionName(parentheticalBranch);
+
+  const branchSegment = markerText.match(/(?:annex|branch|satellite|extension|outstation|site\s*\d+)(?:\s+[a-z0-9-]+){0,4}/i)?.[0] ?? "";
+  return branchSegment ? normalizeSelectionName(branchSegment) : "";
+}
+
 function facilityRecordKey(record: FacilitySearchResultRow) {
-  return [normalizeSelectionName(record.facilityName), normalizeSelectionName(record.category)].join("|");
+  const name = normalizeSelectionName(record.facilityName || record.text);
+  const category = normalizeSelectionName(record.category);
+  const address = facilityRecordAddressKey(record);
+  const branch = facilityRecordBranchKey(record);
+  const fallbackId = stablePortalIdKey(record.hefamaaId);
+
+  return [name || fallbackId, category, address || branch].join("|");
+}
+
+function portalRecordDateTime(record: FacilitySearchResultRow) {
+  return parseDateString(record.recordDate)?.getTime() ?? 0;
+}
+
+function portalRecordStatusPriority(record: FacilitySearchResultRow) {
+  const status = cleanPortalText(record.registrationStatus).toLowerCase();
+  if (/approved|current|registered/.test(status)) return 3;
+  if (/final/.test(status)) return 2;
+  if (/pending/.test(status)) return 1;
+  return 0;
+}
+
+function selectPreferredLatestRecord(records: PortalFacilityRecord[]) {
+  const currentYear = getCurrentRenewalYear();
+
+  return [...records].sort((a, b) => {
+    const aCurrent = a.renewalYear === currentYear ? 1 : 0;
+    const bCurrent = b.renewalYear === currentYear ? 1 : 0;
+    const yearPriority = (b.renewalYear ?? 0) - (a.renewalYear ?? 0);
+    const statusPriority = portalRecordStatusPriority(b) - portalRecordStatusPriority(a);
+    const actionPriority = Number(b.hasAction) - Number(a.hasAction);
+    const datePriority = portalRecordDateTime(b) - portalRecordDateTime(a);
+
+    return bCurrent - aCurrent || yearPriority || statusPriority || actionPriority || datePriority;
+  })[0];
+}
+
+function facilityRecordFamilyKey(record: FacilitySearchResultRow) {
+  const name = normalizeSelectionName(record.facilityName || record.text)
+    .replace(/\([^)]*(?:annex|branch|satellite|extension|outstation|site\s*\d+)[^)]*\)/gi, " ")
+    .replace(FACILITY_BRANCH_PATTERN, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return name || stablePortalIdKey(record.hefamaaId);
+}
+
+function latestDetailTargetRecords(records: PortalFacilityRecord[]) {
+  return latestUniqueFacilityRecords(records)
+    .filter((record) => record.hasAction)
+    .sort((a, b) => {
+      const familyOrder = facilityRecordFamilyKey(a).localeCompare(facilityRecordFamilyKey(b));
+      if (familyOrder) return familyOrder;
+
+      const identityOrder = facilityRecordKey(a).localeCompare(facilityRecordKey(b));
+      if (identityOrder) return identityOrder;
+
+      return (b.renewalYear ?? 0) - (a.renewalYear ?? 0);
+    });
 }
 
 function classifyPortalFacilityRecords(records: PortalFacilityRecord[]) {
@@ -1297,15 +2141,18 @@ function classifyPortalFacilityRecords(records: PortalFacilityRecord[]) {
 }
 
 function latestUniqueFacilityRecords(records: PortalFacilityRecord[]) {
-  const latest = new Map<string, PortalFacilityRecord>();
+  const grouped = new Map<string, PortalFacilityRecord[]>();
 
   for (const record of records) {
     const key = facilityRecordKey(record);
-    const existing = latest.get(key);
-    if (!existing || (record.renewalYear ?? 0) > (existing.renewalYear ?? 0)) latest.set(key, record);
+    const group = grouped.get(key) ?? [];
+    group.push(record);
+    grouped.set(key, group);
   }
 
-  return Array.from(latest.values());
+  return Array.from(grouped.values())
+    .map((group) => selectPreferredLatestRecord(group))
+    .filter((record): record is PortalFacilityRecord => Boolean(record));
 }
 
 function countByFacilityType(records: PortalFacilityRecord[]) {
@@ -1340,8 +2187,16 @@ function portalFacilityCachePath() {
 
 function readPortalFacilityCache(): PortalFacilityRecord[] {
   const cachePath = portalFacilityCachePath();
+  const mtimeMs = fileMtimeMs(cachePath);
+
+  if (portalFacilityListCache?.path === cachePath && portalFacilityListCache.mtimeMs === mtimeMs) {
+    return portalFacilityListCache.value;
+  }
 
   if (!existsSync(cachePath)) {
+    portalFacilityListCache = { path: cachePath, mtimeMs, value: [] };
+    portalFacilityExportCache = null;
+    portalFacilitySummaryCache = null;
     return [];
   }
 
@@ -1349,19 +2204,722 @@ function readPortalFacilityCache(): PortalFacilityRecord[] {
     const raw = readFileSync(cachePath, "utf8");
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
+      portalFacilityListCache = { path: cachePath, mtimeMs, value: parsed };
+      portalFacilityExportCache = null;
+      portalFacilitySummaryCache = null;
       return parsed;
     }
   } catch {
     // ignore invalid cache data
   }
 
+  portalFacilityListCache = { path: cachePath, mtimeMs, value: [] };
+  portalFacilityExportCache = null;
+  portalFacilitySummaryCache = null;
   return [];
 }
 
 function writePortalFacilityCache(records: PortalFacilityRecord[]) {
   const cachePath = portalFacilityCachePath();
   mkdirSync(path.dirname(cachePath), { recursive: true });
-  writeFileSync(cachePath, JSON.stringify(records, null, 2), "utf8");
+  const tempPath = cachePath + ".tmp";
+  writeFileSync(tempPath, JSON.stringify(records, null, 2), "utf8");
+  renameSync(tempPath, cachePath);
+  portalFacilityListCache = { path: cachePath, mtimeMs: fileMtimeMs(cachePath), value: records };
+  portalFacilityExportCache = null;
+  portalFacilitySummaryCache = null;
+}
+
+const STAFF_COMPLEMENT_ALIASES: Record<string, string[]> = {
+  Doctors: ["doctor", "medical doctor", "physician"],
+  Nurses: ["nurse", "nursing"],
+  "Lab Scientists": ["lab scientist", "laboratory scientist", "medical laboratory scientist", "lab sci"],
+  "Lab Technicians": ["lab tech", "laboratory technician", "technician"],
+  Pharmacists: ["pharmacist"],
+  Radiographers: ["radiographer"],
+};
+
+function portalFacilityDetailsCachePath() {
+  const configuredPath = process.env.HEFAMAA_PORTAL_DETAILS_CACHE?.trim() || "data/portal-facility-details-cache.json";
+  return path.isAbsolute(configuredPath) ? configuredPath : path.join(process.cwd(), configuredPath);
+}
+
+export function readPortalFacilityDetailsCache(): PortalFacilityDetailRecord[] {
+  const cachePath = portalFacilityDetailsCachePath();
+  const mtimeMs = fileMtimeMs(cachePath);
+
+  if (portalFacilityDetailsCache?.path === cachePath && portalFacilityDetailsCache.mtimeMs === mtimeMs) {
+    return portalFacilityDetailsCache.value;
+  }
+
+  if (!existsSync(cachePath)) {
+    portalFacilityDetailsCache = { path: cachePath, mtimeMs, value: [] };
+    portalFacilityExportCache = null;
+    portalFacilitySummaryCache = null;
+    return [];
+  }
+
+  try {
+    const raw = readFileSync(cachePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      portalFacilityDetailsCache = { path: cachePath, mtimeMs, value: parsed };
+      portalFacilityExportCache = null;
+      portalFacilitySummaryCache = null;
+      return parsed;
+    }
+  } catch {
+    // ignore invalid cache data
+  }
+
+  portalFacilityDetailsCache = { path: cachePath, mtimeMs, value: [] };
+  portalFacilityExportCache = null;
+  portalFacilitySummaryCache = null;
+  return [];
+}
+
+function writePortalFacilityDetailsCache(records: PortalFacilityDetailRecord[]) {
+  const cachePath = portalFacilityDetailsCachePath();
+  mkdirSync(path.dirname(cachePath), { recursive: true });
+  const tempPath = cachePath + ".tmp";
+  writeFileSync(tempPath, JSON.stringify(records, null, 2), "utf8");
+  renameSync(tempPath, cachePath);
+  portalFacilityDetailsCache = { path: cachePath, mtimeMs: fileMtimeMs(cachePath), value: records };
+  portalFacilityExportCache = null;
+  portalFacilitySummaryCache = null;
+}
+
+function portalDetailCacheKey(record: Pick<PortalFacilityRecord, "category" | "facilityName" | "hefamaaId" | "renewalYear">) {
+  return [record.hefamaaId, record.facilityName, record.category, record.renewalYear ?? ""]
+    .map((value) => cleanPortalText(String(value)).toLowerCase())
+    .join("|");
+}
+
+function portalDetailCacheMap(records = readPortalFacilityDetailsCache()) {
+  return new Map(records.map((record) => [record.cacheKey, record] as const));
+}
+
+function lastDetailCapturedAt(records: PortalFacilityDetailRecord[]) {
+  return records.reduce<string | null>((latest, record) => {
+    if (!record.capturedAt) return latest;
+    return latest === null || record.capturedAt > latest ? record.capturedAt : latest;
+  }, null);
+}
+
+function addDetailField(fields: Record<string, string>, label: unknown, value: unknown) {
+  const cleanLabel = cleanPortalText(String(label ?? ""));
+  const cleanValue = cleanPortalText(String(value ?? ""));
+  if (!cleanLabel || !cleanValue) return;
+  fields[cleanLabel] = cleanValue;
+}
+
+function buildDetailFieldIndex(input: {
+  bodyText: string;
+  formFields: VisibleFormField[];
+  sourceRecord: PortalFacilityRecord;
+  tables: string[][][];
+}) {
+  const fields: Record<string, string> = {};
+
+  for (const [label, value] of Object.entries(input.sourceRecord.visibleFields ?? {})) {
+    addDetailField(fields, label, value);
+  }
+
+  for (const field of input.formFields) {
+    addDetailField(fields, field.label, field.value);
+  }
+
+  input.tables.forEach((table, tableIndex) => {
+    table.forEach((row, rowIndex) => {
+      const cells = row.map((cell) => cleanPortalText(cell)).filter(Boolean);
+      if (cells.length === 2) {
+        addDetailField(fields, cells[0], cells[1]);
+      } else if (cells.length > 2 && cells.length <= 8) {
+        cells.forEach((cell, cellIndex) => {
+          addDetailField(fields, "Table " + (tableIndex + 1) + " Row " + (rowIndex + 1) + " Column " + (cellIndex + 1), cell);
+        });
+      }
+    });
+  });
+
+  return fields;
+}
+
+function numericDetailValue(fields: Record<string, string>, aliases: string[]) {
+  for (const [label, value] of Object.entries(fields)) {
+    const normalizedLabel = label.toLowerCase();
+    if (!aliases.some((alias) => normalizedLabel.includes(alias))) continue;
+    const numeric = Number(String(value).replace(/[^0-9.-]+/g, ""));
+    if (Number.isFinite(numeric)) return Math.max(0, numeric);
+  }
+  return null;
+}
+
+function countStaffComplement(input: { bodyText: string; fieldIndex: Record<string, string>; tables: string[][][] }) {
+  const result: Record<string, number> = {};
+
+  for (const [label, aliases] of Object.entries(STAFF_COMPLEMENT_ALIASES)) {
+    const directValue = numericDetailValue(input.fieldIndex, aliases);
+    if (directValue !== null) {
+      result[label] = directValue;
+      continue;
+    }
+
+    let count = 0;
+    for (const table of input.tables) {
+      table.forEach((row, rowIndex) => {
+        const rowText = row.join(" ").toLowerCase();
+        const isLikelyHeader = rowIndex === 0 && /name|profession|designation|qualification|staff/.test(rowText);
+        if (isLikelyHeader) return;
+        if (aliases.some((alias) => rowText.includes(alias))) count += 1;
+      });
+    }
+    result[label] = count;
+  }
+
+  result.Total = Object.entries(result)
+    .filter(([label]) => label !== "Total")
+    .reduce((total, [, count]) => total + count, 0);
+  return result;
+}
+
+function extractStaffDetails(tables: string[][][]) {
+  const aliasEntries = Object.entries(STAFF_COMPLEMENT_ALIASES).filter(([label]) => label !== "Total");
+  const details: PortalStaffDetail[] = [];
+
+  tables.forEach((table, tableIndex) => {
+    const tableText = table.flat().map((cell) => cleanPortalText(cell)).join(" ").toLowerCase();
+    const looksLikeStaffTable = /professional staff|staff complement|staff details|profession|designation|qualification/.test(tableText)
+      && /name|profession|designation|qualification|staff/.test(tableText);
+
+    table.forEach((row, rowIndex) => {
+      const values = row.map((cell) => cleanPortalText(cell)).filter(Boolean);
+      const rowText = values.join(" ").toLowerCase();
+      const isLikelyHeader = rowIndex === 0 && /name|profession|designation|qualification|staff/.test(rowText);
+      if (!values.length || isLikelyHeader) return;
+
+      const matchedComplements = aliasEntries
+        .filter(([, aliases]) => aliases.some((alias) => rowText.includes(alias)))
+        .map(([label]) => label);
+
+      // Staff tables can contain roles we have not named yet, so keep the whole row once the table itself is identified.
+      if (!looksLikeStaffTable && !matchedComplements.length) return;
+
+      details.push({
+        matchedComplements: Array.from(new Set(matchedComplements)),
+        rowIndex: rowIndex + 1,
+        tableIndex: tableIndex + 1,
+        text: values.join(" | "),
+        values,
+      });
+    });
+  });
+
+  return details;
+}
+
+function formatStaffDetails(staffDetails: PortalStaffDetail[] = []) {
+  return staffDetails.map((detail) => detail.text).filter(Boolean).join("\n");
+}
+
+function mergePortalFacilityRecordWithDetail(record: PortalFacilityRecord, detail?: PortalFacilityDetailRecord): PortalFacilityRecord {
+  if (!detail) return record;
+
+  const staffFields = Object.fromEntries(
+    Object.entries(detail.staffComplement ?? {}).map(([label, value]) => ["No of " + label, String(value)]),
+  );
+  const staffDetailsText = formatStaffDetails(detail.staffDetails);
+  const staffDetailFields: Record<string, string> = staffDetailsText
+    ? {
+        "Professional Staff Details": staffDetailsText,
+        "Professional Staff Rows Captured": String(detail.staffDetails?.length ?? 0),
+      }
+    : {};
+
+  return {
+    ...record,
+    visibleFields: {
+      ...(record.visibleFields ?? {}),
+      ...(detail.visibleFields ?? {}),
+      ...(detail.fieldIndex ?? {}),
+      ...staffFields,
+      ...staffDetailFields,
+      "Detail Captured At": detail.capturedAt,
+      "Detail Source URL": detail.url,
+    },
+    text: [record.text, detail.text, staffDetailsText, detail.bodyText].filter(Boolean).join("\n"),
+  };
+}
+
+function mergePortalFacilityDetails(records: PortalFacilityRecord[]) {
+  const details = portalDetailCacheMap();
+  return records.map((record) => mergePortalFacilityRecordWithDetail(record, details.get(portalDetailCacheKey(record))));
+}
+
+async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacilityRecord): Promise<PortalFacilityDetailRecord> {
+  const [bodyText, formFields, tables] = await Promise.all([
+    getVisibleText(page),
+    getVisibleFormFields(page),
+    getVisibleTables(page),
+  ]);
+  const fieldIndex = buildDetailFieldIndex({ bodyText, formFields, sourceRecord, tables });
+  const staffComplement = countStaffComplement({ bodyText, fieldIndex, tables });
+  // Counts are useful for sheet columns, while staffDetails preserves the complete staff rows for AI answers and exports.
+  const staffDetails = extractStaffDetails(tables);
+  const staffDetailsText = formatStaffDetails(staffDetails);
+  const staffFields = Object.fromEntries(
+    Object.entries(staffComplement).map(([label, value]) => ["No of " + label, String(value)]),
+  );
+  const staffDetailFields: Record<string, string> = staffDetailsText
+    ? {
+        "Professional Staff Details": staffDetailsText,
+        "Professional Staff Rows Captured": String(staffDetails.length),
+      }
+    : {};
+  const visibleFields = {
+    ...(sourceRecord.visibleFields ?? {}),
+    ...Object.fromEntries(formFields.map((field) => [field.label, field.value])),
+    ...fieldIndex,
+    ...staffFields,
+    ...staffDetailFields,
+  };
+  const text = [buildPortalSnapshotText({ bodyText, formFields, tables }), staffDetailsText].filter(Boolean).join("\n");
+
+  return {
+    applicationType: sourceRecord.applicationType,
+    bodyText,
+    cacheKey: portalDetailCacheKey(sourceRecord),
+    capturedAt: new Date().toISOString(),
+    category: sourceRecord.category,
+    facilityName: sourceRecord.facilityName,
+    fieldIndex,
+    formFields,
+    hefamaaId: sourceRecord.hefamaaId,
+    normalizedStatus: sourceRecord.normalizedStatus,
+    recordDate: sourceRecord.recordDate ?? null,
+    registrationStatus: sourceRecord.registrationStatus,
+    renewalYear: sourceRecord.renewalYear,
+    sourceRecord,
+    staffComplement,
+    staffDetails,
+    tables,
+    text,
+    url: page.url(),
+    visibleFields,
+  };
+}
+
+async function restoreFacilityGridAfterDetail(page: Page, beforeUrl: string, beforeFingerprint: string) {
+  await page.keyboard.press("Escape").catch(() => undefined);
+  const closeButtons = page.locator([
+    'button:has-text("Close")',
+    'a:has-text("Close")',
+    '.modal button.close',
+    '.modal .close',
+    '[data-dismiss="modal"]',
+    '[aria-label="Close"]',
+  ].join(", "));
+  const closeCount = await closeButtons.count().catch(() => 0);
+  for (let index = 0; index < Math.min(closeCount, 2); index += 1) {
+    const button = closeButtons.nth(index);
+    if (await button.isVisible().catch(() => false)) {
+      await button.click({ timeout: 800 }).catch(() => undefined);
+      await page.waitForTimeout(120).catch(() => undefined);
+      break;
+    }
+  }
+
+  const hasGrid = await page.locator("#mainGrid").count().catch(() => 0);
+  const currentFingerprint = hasGrid ? await facilityTableFingerprint(page).catch(() => "") : "";
+  if (hasGrid && (!beforeFingerprint || currentFingerprint)) return;
+
+  if (page.url() !== beforeUrl) {
+    await page.goBack({ waitUntil: "domcontentloaded", timeout: 2_500 }).catch(() => undefined);
+  }
+
+  // Keep this step opportunistic. If the grid is not ready quickly, the next search
+  // cycle will reopen the facilities grid instead of blocking every capture here.
+  await page.waitForSelector("#mainGrid", { timeout: 1_500 }).catch(() => undefined);
+}
+
+
+function normalizePortalMatchValue(value: string | null | undefined) {
+  return cleanPortalText(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function portalRecordMatchScore(expected: PortalFacilityRecord, row: FacilitySearchResultRow) {
+  const expectedId = normalizePortalMatchValue(expected.hefamaaId);
+  const rowId = normalizePortalMatchValue(row.hefamaaId);
+  const expectedName = normalizePortalMatchValue(expected.facilityName);
+  const rowName = normalizePortalMatchValue(row.facilityName);
+  const expectedCategory = normalizePortalMatchValue(expected.category);
+  const rowCategory = normalizePortalMatchValue(row.category);
+  let score = 0;
+
+  if (expectedId && rowId) {
+    if (expectedId === rowId) score += 1000;
+    else if (expectedId.includes(rowId) || rowId.includes(expectedId)) score += 180;
+    else score -= 120;
+  }
+
+  if (expectedName && rowName) {
+    if (expectedName === rowName) score += 240;
+    else if (expectedName.includes(rowName) || rowName.includes(expectedName)) score += 80;
+  }
+
+  if (expectedCategory && rowCategory) {
+    if (expectedCategory === rowCategory) score += 80;
+    else score -= 30;
+  }
+
+  if (expected.renewalYear && row.renewalYear) {
+    if (expected.renewalYear === row.renewalYear) score += 160;
+    else score -= Math.min(120, Math.abs(expected.renewalYear - row.renewalYear) * 25);
+  }
+
+  if (!expectedId && !expectedName) return Number.NEGATIVE_INFINITY;
+  return score;
+}
+
+function latestValidPortalRowScore(expected: PortalFacilityRecord, row: FacilitySearchResultRow) {
+  const expectedStableId = stablePortalIdKey(expected.hefamaaId);
+  const rowStableId = stablePortalIdKey(row.hefamaaId);
+  const expectedFamily = facilityRecordFamilyKey(expected);
+  const rowFamily = facilityRecordFamilyKey(row);
+  const expectedCategory = normalizePortalMatchValue(expected.category);
+  const rowCategory = normalizePortalMatchValue(row.category);
+  const expectedName = normalizePortalMatchValue(expected.facilityName);
+  const rowName = normalizePortalMatchValue(row.facilityName);
+  let score = 0;
+
+  if (expectedStableId && rowStableId && expectedStableId === rowStableId) score += 420;
+  if (expectedFamily && rowFamily) {
+    if (expectedFamily === rowFamily) score += 260;
+    else if (expectedFamily.includes(rowFamily) || rowFamily.includes(expectedFamily)) score += 120;
+  }
+  if (expectedName && rowName) {
+    if (expectedName === rowName) score += 160;
+    else if (expectedName.includes(rowName) || rowName.includes(expectedName)) score += 80;
+  }
+  if (expectedCategory && rowCategory) score += expectedCategory === rowCategory ? 90 : -40;
+  if (row.hasAction) score += 20;
+  if (/approved|current|registered|final/i.test(row.registrationStatus)) score += 30;
+
+  return score;
+}
+
+function selectLatestValidPortalRow(rows: FacilitySearchResultRow[], expected: PortalFacilityRecord) {
+  const candidates = rows
+    .map((row) => ({ row, score: latestValidPortalRowScore(expected, row) }))
+    .filter((entry) => entry.score >= 140);
+
+  if (!candidates.length) return null;
+
+  return candidates.sort((a, b) => {
+    const yearPriority = (b.row.renewalYear ?? 0) - (a.row.renewalYear ?? 0);
+    const statusPriority = portalRecordStatusPriority(b.row) - portalRecordStatusPriority(a.row);
+    const scorePriority = b.score - a.score;
+    const datePriority = portalRecordDateTime(b.row) - portalRecordDateTime(a.row);
+    return yearPriority || statusPriority || scorePriority || datePriority;
+  })[0].row;
+}
+
+function selectExpectedPortalRow(rows: FacilitySearchResultRow[], expected: PortalFacilityRecord) {
+  const scored = rows
+    .map((row) => ({ row, score: portalRecordMatchScore(expected, row) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (scored[0]?.score >= 180) return scored[0].row;
+
+  const latestValidRow = selectLatestValidPortalRow(rows, expected);
+  if (latestValidRow) return latestValidRow;
+
+  if (scored[0]) return scored[0].row;
+  return rows.length === 1 ? rows[0] : null;
+}
+
+function mergeExpectedRecordWithPortalRow(expected: PortalFacilityRecord, selected: FacilitySearchResultRow): PortalFacilityRecord {
+  const normalizedStatus = normalizePortalStatus(selected.registrationStatus || expected.registrationStatus, selected.renewalYear ?? expected.renewalYear);
+
+  return {
+    ...expected,
+    index: selected.index,
+    facilityName: expected.facilityName || selected.facilityName,
+    hefamaaId: expected.hefamaaId || selected.hefamaaId,
+    category: expected.category || selected.category,
+    registrationStatus: selected.registrationStatus || expected.registrationStatus,
+    recordDate: selected.recordDate ?? expected.recordDate ?? null,
+    renewalYear: expected.renewalYear ?? selected.renewalYear,
+    visibleFields: {
+      ...(expected.visibleFields ?? {}),
+      ...(selected.visibleFields ?? {}),
+    },
+    text: cleanPortalText([expected.text, selected.text].filter(Boolean).join("\n")),
+    hasAction: selected.hasAction,
+    applicationType: inferPortalApplicationType(selected, normalizedStatus),
+    normalizedStatus,
+    lastSeen: new Date().toISOString(),
+  };
+}
+
+async function searchExpectedPortalRecord(page: Page, expected: PortalFacilityRecord) {
+  const queries = Array.from(new Set([expected.facilityName, expected.hefamaaId].map(cleanPortalText).filter(Boolean)));
+
+  for (const query of queries) {
+    let input = await openFacilitiesSearchPage(page);
+    if (!input) {
+      throw new Error("The HEFAMAA facility search input is not visible. Confirm you are logged in and the facilities table is open.");
+    }
+
+    const previousFingerprint = await facilityTableFingerprint(page).catch(() => "");
+    let filled = await fillFacilitySearchInput(page, input, query);
+    if (!filled) {
+      await openFacilitiesGrid(page).catch(() => undefined);
+      await prepareFacilityGridForFullScan(page).catch(() => undefined);
+      input = await openFacilitiesSearchPage(page);
+      filled = input ? await fillFacilitySearchInput(page, input, query) : false;
+    }
+
+    if (!filled || !input) {
+      throw new Error("The HEFAMAA facility search input is visible but not editable. The grid was reopened and the scan will continue with the next facility.");
+    }
+
+    await input.press("Enter", { timeout: 1_000 }).catch(() => undefined);
+    await clickSearchButtonIfAvailable(page);
+    await waitForFacilitySearchResults(page, query, previousFingerprint);
+
+    const rows = await getFacilityResultRows(page);
+    const selectedRow = selectExpectedPortalRow(rows, expected);
+    if (selectedRow) {
+      return { query, rows, selectedRow };
+    }
+  }
+
+  return null;
+}
+
+async function capturePortalFacilityDetails(
+  page: Page,
+  expectedRecords: PortalFacilityRecord[],
+) {
+  const expectedKeys = new Set(expectedRecords.map((record) => portalDetailCacheKey(record)));
+  const detailMap = portalDetailCacheMap();
+  let scannedDetails = Array.from(expectedKeys).filter((key) => detailMap.has(key)).length;
+  let failedDetails = 0;
+  let skippedDetails = 0;
+
+  updatePortalScanProgress({
+    currentFacilityHefamaaId: null,
+    currentFacilityName: null,
+    detailTotal: expectedRecords.length,
+    failedDetails,
+    lastCapturedFacilityName: null,
+    message: "Capturing latest valid facility details for offline AI answers...",
+    phase: "capturing_details",
+    scannedDetails,
+    skippedDetails,
+  });
+
+  if (!expectedRecords.length || scannedDetails >= expectedRecords.length) {
+    updatePortalScanProgress({
+      message: expectedRecords.length
+        ? "All latest valid facility detail records are already cached; full scan reused the saved captures."
+        : "No latest valid facility records were available for detail capture.",
+      scannedDetails,
+    });
+    return Array.from(detailMap.values());
+  }
+
+  throwIfPortalScanStopped();
+  await openFacilitiesGrid(page);
+  await page.waitForSelector("#mainGrid", { timeout: 30_000 });
+  await prepareFacilityGridForFullScan(page).catch(() => undefined);
+
+  for (let recordIndex = 0; recordIndex < expectedRecords.length; recordIndex += 1) {
+    throwIfPortalScanStopped();
+    const expectedRecord = expectedRecords[recordIndex];
+    const key = portalDetailCacheKey(expectedRecord);
+    if (detailMap.has(key)) continue;
+
+    const facilityName = portalRecordDisplayName(expectedRecord);
+    const detailIndex = recordIndex + 1;
+
+    appendPortalScanEvent({
+      category: expectedRecord.category,
+      detailIndex,
+      detailTotal: expectedRecords.length,
+      facilityName,
+      hefamaaId: expectedRecord.hefamaaId,
+      message: "Capturing " + facilityName + " now...",
+      status: "capturing",
+    });
+    updatePortalScanProgress({
+      currentFacilityHefamaaId: expectedRecord.hefamaaId || null,
+      currentFacilityName: facilityName,
+      detailTotal: expectedRecords.length,
+      failedDetails,
+      message: "Capturing " + facilityName + " now...",
+      phase: "capturing_details",
+      scannedDetails,
+      skippedDetails,
+    });
+
+    let beforeUrl = page.url();
+    let beforeFingerprint = "";
+
+    try {
+      throwIfPortalScanStopped();
+      const searchResult = await searchExpectedPortalRecord(page, expectedRecord);
+      throwIfPortalScanStopped();
+      if (!searchResult) {
+        skippedDetails += 1;
+        appendPortalScanEvent({
+          category: expectedRecord.category,
+          detailIndex,
+          detailTotal: expectedRecords.length,
+          facilityName,
+          hefamaaId: expectedRecord.hefamaaId,
+          message: facilityName + " skipped because the exact latest valid portal row was not found.",
+          status: "skipped",
+        });
+        updatePortalScanProgress({
+          currentFacilityHefamaaId: null,
+          currentFacilityName: null,
+          failedDetails,
+          message: facilityName + " was not found in portal search; moving to the next facility.",
+          scannedDetails,
+          skippedDetails,
+        });
+        continue;
+      }
+
+      const sourceRecord = mergeExpectedRecordWithPortalRow(expectedRecord, searchResult.selectedRow);
+      beforeUrl = page.url();
+      beforeFingerprint = await facilityTableFingerprint(page).catch(() => "");
+
+      const clicked = await openFacilityResult(page, searchResult.selectedRow.index).catch(() => false);
+      throwIfPortalScanStopped();
+      if (!clicked) {
+        skippedDetails += 1;
+        appendPortalScanEvent({
+          category: sourceRecord.category,
+          detailIndex,
+          detailTotal: expectedRecords.length,
+          facilityName,
+          hefamaaId: sourceRecord.hefamaaId,
+          message: facilityName + " skipped because the portal row could not be opened.",
+          status: "skipped",
+        });
+        updatePortalScanProgress({
+          currentFacilityHefamaaId: null,
+          currentFacilityName: null,
+          failedDetails,
+          message: facilityName + " could not be opened; moving to the next facility.",
+          scannedDetails,
+          skippedDetails,
+        });
+        continue;
+      }
+
+      await waitForFacilityRecordReady(page, sourceRecord.facilityName || facilityName, 2_500);
+
+      let detail: PortalFacilityDetailRecord;
+      try {
+        detail = await captureFacilityDetailRecord(page, sourceRecord);
+      } catch (firstCaptureError) {
+        await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
+        await waitForFacilityRecordReady(page, sourceRecord.facilityName || facilityName, 2_000);
+        detail = await captureFacilityDetailRecord(page, sourceRecord).catch((secondCaptureError) => {
+          throw new Error(scanErrorMessage(secondCaptureError) + " | first attempt: " + scanErrorMessage(firstCaptureError));
+        });
+      }
+
+      throwIfPortalScanStopped();
+      detailMap.set(key, { ...detail, cacheKey: key, sourceRecord });
+      scannedDetails += 1;
+      writePortalFacilityDetailsCache(Array.from(detailMap.values()));
+      appendPortalScanEvent({
+        category: sourceRecord.category,
+        detailIndex,
+        detailTotal: expectedRecords.length,
+        facilityName,
+        hefamaaId: sourceRecord.hefamaaId,
+        message: facilityName + " captured successfully.",
+        status: "captured",
+      });
+      updatePortalScanProgress({
+        currentFacilityHefamaaId: null,
+        currentFacilityName: null,
+        detailTotal: expectedRecords.length,
+        failedDetails,
+        lastCapturedFacilityName: facilityName,
+        message: facilityName + " captured successfully. Capturing next facility...",
+        phase: "capturing_details",
+        scannedDetails,
+        skippedDetails,
+      });
+    } catch (error) {
+      if (isPortalScanCancellationError(error)) {
+        throw new Error("Portal scan cancelled by user.");
+      }
+
+      if (page.isClosed() || isPortalTargetClosedError(error)) {
+        throw new Error("Portal browser closed during full detail scan: " + scanErrorMessage(error));
+      }
+
+      failedDetails += 1;
+      const errorMessage = scanErrorMessage(error);
+      console.warn("[portal/scan] detail capture failed", { facilityName, hefamaaId: expectedRecord.hefamaaId, error: errorMessage });
+      appendPortalScanEvent({
+        category: expectedRecord.category,
+        detailIndex,
+        detailTotal: expectedRecords.length,
+        error: errorMessage,
+        facilityName,
+        hefamaaId: expectedRecord.hefamaaId,
+        message: facilityName + " could not be captured; moving to the next facility.",
+        status: "failed",
+      });
+      updatePortalScanProgress({
+        currentFacilityHefamaaId: null,
+        currentFacilityName: null,
+        failedDetails,
+        message: facilityName + " could not be captured. Continuing with the next facility.",
+        scannedDetails,
+        skippedDetails,
+      });
+    } finally {
+      if (!portalRuntime.scanStopRequested && !page.isClosed()) {
+        await restoreFacilityGridAfterDetail(page, beforeUrl, beforeFingerprint).catch(async (restoreError) => {
+          const errorMessage = scanErrorMessage(restoreError);
+          if (portalRuntime.scanStopRequested || page.isClosed() || isPortalTargetClosedError(restoreError)) {
+            return;
+          }
+
+          console.warn("[portal/scan] failed to restore facility grid", errorMessage);
+        appendPortalScanEvent({
+          error: errorMessage,
+          message: "The portal grid needed recovery after " + facilityName + ". Reopening the facilities table.",
+          status: "info",
+        });
+        await openFacilitiesGrid(page).catch(() => undefined);
+          await page.waitForSelector("#mainGrid", { timeout: 15_000 }).catch(() => undefined);
+        });
+      }
+    }
+  }
+
+  const details = Array.from(detailMap.values());
+  writePortalFacilityDetailsCache(details);
+  updatePortalScanProgress({
+    currentFacilityHefamaaId: null,
+    currentFacilityName: null,
+    failedDetails,
+    scannedDetails,
+    skippedDetails,
+  });
+  return details;
 }
 
 function parseDateString(value: string | null | undefined) {
@@ -1544,16 +3102,14 @@ async function scanFacilityList(
   onProgress?: (progress: PortalScanProgress) => void,
   onRecords?: (records: PortalFacilityRecord[]) => void,
 ) {
-  if (!page.url().startsWith(getFacilitiesUrl())) {
-    await page.goto(getFacilitiesUrl(), { waitUntil: "domcontentloaded", timeout: 30_000 });
-  }
+  await openFacilitiesGrid(page);
 
   await page.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
   await page.waitForTimeout(800);
 
   if (!(await page.locator("#mainGrid").count())) {
     const title = await page.title().catch(() => "HEFAMAA portal");
-    throw new Error("The HEFAMAA facilities table is not visible on " + title + ". Open the portal, log in if required, then run Full Scan again.");
+    throw new Error("The HEFAMAA facilities table is not visible on " + title + ". Open the portal, log in if required, then run Full Detail Scan again.");
   }
 
   await prepareFacilityGridForFullScan(page);
@@ -1591,6 +3147,8 @@ async function scanFacilityList(
     }
     onProgress?.({
       completedAt: null,
+      message: "Indexing portal facility list...",
+      phase: "indexing_list",
       portalReportedRecords,
       scannedPages: pageIndex + 1,
       scannedRecords: gathered.length,
@@ -1614,62 +3172,157 @@ function stampPortalScanRecords(records: PortalFacilityRecord[], lastSeen = new 
   }));
 }
 
-export async function scanAllPortalFacilities() {
+function notificationAutoSendEnabledAfterScan(mode: PortalScanMode) {
+  if (process.env.NOTIFICATION_AUTO_SEND_AFTER_SCAN !== "true") return false;
+  if (mode === "quick" && process.env.NOTIFICATION_AUTO_SEND_AFTER_QUICK_SCAN !== "true") return false;
+  return true;
+}
+
+async function triggerNotificationAutoSendAfterScan(mode: PortalScanMode) {
+  if (!notificationAutoSendEnabledAfterScan(mode)) return;
+
+  appendPortalScanEvent({
+    message: "Facility notification auto-response started from the completed portal scan.",
+    status: "info",
+  });
+
+  try {
+    const { MAX_NOTIFICATION_RECIPIENTS, runDailyNotificationScan } = await import("@/lib/notificationEngine");
+    const result = await runDailyNotificationScan({
+      channels: ["email", "sms"],
+      confirmed: true,
+      createdBy: "HEFA-AI Portal Scan",
+      limit: MAX_NOTIFICATION_RECIPIENTS,
+    });
+    const logs = Array.isArray(result.logs) ? result.logs : [];
+    const sent = logs.filter((log) => log.status === "sent").length;
+    const skipped = logs.filter((log) => log.status === "skipped").length;
+    const failed = logs.filter((log) => log.status === "failed").length;
+    appendPortalScanEvent({
+      message: "Facility notification auto-response completed. Sent " + sent + ", skipped " + skipped + ", failed " + failed + ".",
+      status: failed > 0 ? "failed" : "info",
+    });
+  } catch (error) {
+    appendPortalScanEvent({
+      error: error instanceof Error ? error.message : "Unknown notification automation error",
+      message: "Facility notification auto-response could not complete after portal scan.",
+      status: "failed",
+    });
+  }
+}
+
+export async function scanAllPortalFacilities(mode: PortalScanMode = "quick") {
+  throwIfPortalScanStopped();
   const session = await ensureSession({ fastOpen: false });
   const primaryPage = session.page && !session.page.isClosed() ? session.page : null;
+  if (primaryPage) {
+    await waitForManualPortalLogin(primaryPage, 120_000);
+  }
+
   const scanPage = await session.context.newPage();
-  scanPage.setDefaultTimeout(15_000);
+  scanPage.setDefaultTimeout(10_000);
   let partialRecords: PortalFacilityRecord[] = [];
   let lastPartialWriteCount = 0;
 
   try {
-    const { portalReportedRecords, records } = await scanFacilityList(
-      scanPage,
-      500,
-      (progress) => {
-        portalRuntime.scanProgress = progress;
-      },
-      (recordsSoFar) => {
-        partialRecords = recordsSoFar;
-        if (recordsSoFar.length - lastPartialWriteCount >= 500) {
-          writePortalFacilityCache(stampPortalScanRecords(recordsSoFar));
-          lastPartialWriteCount = recordsSoFar.length;
-        }
-      },
-    );
+    throwIfPortalScanStopped();
+    const cachedRecords = classifyPortalFacilityRecords(readPortalFacilityCache());
+    const shouldReuseListCache = mode === "full" && cachedRecords.length > 0;
+    let portalReportedRecords: number | null = null;
+    let records: PortalFacilityRecord[] = [];
+
+    if (shouldReuseListCache) {
+      records = cachedRecords;
+      portalReportedRecords = portalRuntime.scanProgress.portalReportedRecords ?? records.length;
+      updatePortalScanProgress({
+        detailTotal: latestDetailTargetRecords(records).length,
+        message: "Using the existing portal index. Full detail capture will open only the latest valid renewal record for each facility identity.",
+        phase: "capturing_details",
+        portalReportedRecords,
+        scanMode: mode,
+        scannedRecords: records.length,
+      });
+    } else {
+      const scanned = await scanFacilityList(
+        scanPage,
+        500,
+        (progress) => {
+          updatePortalScanProgress({
+            ...progress,
+            detailTotal: mode === "full" ? portalRuntime.scanProgress.detailTotal ?? 0 : 0,
+            scanMode: mode,
+            scannedDetails: mode === "full" ? portalRuntime.scanProgress.scannedDetails ?? 0 : 0,
+          });
+        },
+        (recordsSoFar) => {
+          partialRecords = recordsSoFar;
+          if (recordsSoFar.length - lastPartialWriteCount >= 500) {
+            writePortalFacilityCache(stampPortalScanRecords(recordsSoFar));
+            lastPartialWriteCount = recordsSoFar.length;
+          }
+        },
+      );
+      portalReportedRecords = scanned.portalReportedRecords;
+      records = scanned.records;
+    }
+
     const now = new Date().toISOString();
-    const datedRecords = stampPortalScanRecords(records, now);
+    const datedRecords = shouldReuseListCache ? records : stampPortalScanRecords(records, now);
 
-    writePortalFacilityCache(datedRecords);
+    if (!shouldReuseListCache) {
+      writePortalFacilityCache(datedRecords);
+    }
 
-    const latestFacilities = latestUniqueFacilityRecords(datedRecords);
-    const facilityTypeCounts = countByFacilityType(datedRecords);
+    throwIfPortalScanStopped();
+    const detailTargetRecords = latestDetailTargetRecords(datedRecords);
+    const detailRecords = mode === "full"
+      ? await capturePortalFacilityDetails(scanPage, detailTargetRecords)
+      : readPortalFacilityDetailsCache();
+    const detailLastCaptured = lastDetailCapturedAt(detailRecords);
+    const currentDetailMap = portalDetailCacheMap(detailRecords);
+    const capturedCurrentDetails = detailTargetRecords.filter((record) => currentDetailMap.has(portalDetailCacheKey(record))).length;
+    const enrichedRecords = mergePortalFacilityDetails(datedRecords);
+    const latestFacilities = latestUniqueFacilityRecords(enrichedRecords);
+    const facilityTypeCounts = countByFacilityType(enrichedRecords);
     const statusCounts = summarizeStatus(latestFacilities);
-  portalRuntime.scanProgress = {
-    completedAt: now,
-    portalReportedRecords,
-    scannedPages: portalRuntime.scanProgress.scannedPages,
-    scannedRecords: datedRecords.length,
-    startedAt: portalRuntime.scanProgress.startedAt,
-    status: "completed",
-  };
+
+    updatePortalScanProgress({
+      completedAt: now,
+      currentFacilityHefamaaId: null,
+      currentFacilityName: null,
+      detailTotal: mode === "full" ? detailTargetRecords.length : portalRuntime.scanProgress.detailTotal ?? 0,
+      lastCapturedFacilityName: mode === "full" ? portalRuntime.scanProgress.lastCapturedFacilityName ?? null : null,
+      message: mode === "full"
+        ? "Full detail scan completed. Captured " + capturedCurrentDetails + " of " + detailTargetRecords.length + " latest valid facility detail records."
+        : "Quick portal scan completed. Indexed " + datedRecords.length + " portal rows.",
+      phase: "completed",
+      portalReportedRecords,
+      scanMode: mode,
+      scannedDetails: mode === "full" ? capturedCurrentDetails : portalRuntime.scanProgress.scannedDetails ?? 0,
+      scannedPages: portalRuntime.scanProgress.scannedPages,
+      scannedRecords: datedRecords.length,
+      startedAt: portalRuntime.scanProgress.startedAt,
+      status: "completed",
+    });
 
     const result = {
       totalFacilities: latestFacilities.length,
-      totalPortalRecords: datedRecords.length,
+      totalPortalRecords: enrichedRecords.length,
       portalReportedRecords,
       categoryCounts: countByCategory(latestFacilities),
-      categoryPortalRecordCounts: countByCategory(datedRecords),
-      applicationTypeCounts: countByApplicationType(datedRecords),
+      categoryPortalRecordCounts: countByCategory(enrichedRecords),
+      detailLastCaptured,
+      detailRecords: detailRecords.length,
+      applicationTypeCounts: countByApplicationType(enrichedRecords),
       facilityTypeCounts,
       statusCounts,
       scanProgress: portalRuntime.scanProgress,
       lastScanned: now,
-      monthlyRegistrationCounts: countByMonth(datedRecords),
-      monthlyNewRegistrationCounts: countByMonth(datedRecords, "new_registration"),
-      monthlyRenewalCounts: countByMonth(datedRecords, "renewal"),
-      yearlyPortalRecordCounts: countByYear(datedRecords),
-      yearlyRenewalCounts: countByYear(datedRecords, "renewal"),
+      monthlyRegistrationCounts: countByMonth(enrichedRecords),
+      monthlyNewRegistrationCounts: countByMonth(enrichedRecords, "new_registration"),
+      monthlyRenewalCounts: countByMonth(enrichedRecords, "renewal"),
+      yearlyPortalRecordCounts: countByYear(enrichedRecords),
+      yearlyRenewalCounts: countByYear(enrichedRecords, "renewal"),
       note: datedRecords.length === 0 ? "No facility rows were found during portal scan." : undefined,
     };
     writePortalScanSnapshot({
@@ -1685,6 +3338,7 @@ export async function scanAllPortalFacilities() {
       statusCounts,
       unknownFacilities: facilityTypeCounts.unknown,
     });
+    void triggerNotificationAutoSendAfterScan(mode);
     return result;
   } catch (error) {
     if (partialRecords.length) {
@@ -1700,33 +3354,68 @@ export async function scanAllPortalFacilities() {
   }
 }
 
-export function startPortalFacilityScan() {
+export function startPortalFacilityScan(input: { mode?: PortalScanMode } = {}) {
+  const mode = input.mode ?? "quick";
   if (portalRuntime.scanPromise) {
-    return getPortalFacilitySummary();
+    if (portalRuntime.scanProgress.status === "running" && !portalRuntime.scanStopRequested) {
+      return getPortalFacilitySummary();
+    }
+
+    portalRuntime.scanPromise = null;
+    portalRuntime.openingSession = null;
   }
 
+  portalRuntime.scanStopRequested = false;
   const startedAt = new Date().toISOString();
-  portalRuntime.scanProgress = {
+  updatePortalScanProgress({
     completedAt: null,
+    currentFacilityHefamaaId: null,
+    currentFacilityName: null,
+    detailTotal: mode === "full" ? latestDetailTargetRecords(classifyPortalFacilityRecords(readPortalFacilityCache())).length : 0,
+    error: undefined,
+    failedDetails: 0,
+    lastCapturedFacilityName: null,
+    message: mode === "full" ? "Starting full detail scan for latest valid facility records..." : "Starting quick portal scan...",
+    phase: "starting",
     portalReportedRecords: null,
+    recentEvents: [createPortalScanEvent({
+      message: mode === "full" ? "Full detail scan started." : "Quick portal scan started.",
+      status: "info",
+    })],
+    scanMode: mode,
+    scannedDetails: 0,
     scannedPages: 0,
     scannedRecords: 0,
+    skippedDetails: 0,
     startedAt,
     status: "running",
-  };
+  });
 
-  const scanPromise = scanAllPortalFacilities()
+  startPortalScanKeepAwake(mode);
+
+  // The promise is kept in module state so a full detail scan can continue while the user navigates the app.
+  const scanPromise = scanAllPortalFacilities(mode)
     .then(() => undefined)
     .catch((error) => {
-      portalRuntime.scanProgress = {
-        ...portalRuntime.scanProgress,
+      const errorMessage = scanErrorMessage(error);
+      const cancelled = isPortalScanCancellationError(error);
+      appendPortalScanEvent({
+        error: cancelled ? undefined : errorMessage,
+        message: cancelled ? "Portal scan stopped by user. Already captured records remain saved in the local cache." : "Portal scan stopped: " + errorMessage,
+        status: cancelled ? "info" : "failed",
+      });
+      updatePortalScanProgress({
         completedAt: new Date().toISOString(),
-        error: error instanceof Error ? error.message : "Portal scan failed",
-        status: "failed",
-      };
-      console.error("[portal/scan] full scan failed", error);
+        currentFacilityHefamaaId: null,
+        currentFacilityName: null,
+        error: cancelled ? undefined : errorMessage,
+        message: cancelled ? "Portal scan stopped by user. You can restart Full Detail Scan and it will resume from cached captures." : "Portal scan stopped: " + errorMessage,
+        status: cancelled ? "cancelled" : "failed",
+      });
+      if (!cancelled) console.error("[portal/scan] full scan failed", error);
     })
     .finally(() => {
+      void stopPortalScanKeepAwake();
       if (portalRuntime.scanPromise === scanPromise) portalRuntime.scanPromise = null;
     });
   portalRuntime.scanPromise = scanPromise;
@@ -1734,8 +3423,51 @@ export function startPortalFacilityScan() {
   return getPortalFacilitySummary();
 }
 
+export async function stopPortalFacilityScan() {
+  if (!portalRuntime.scanPromise && portalRuntime.scanProgress.status !== "running") {
+    return getFastPortalFacilitySummary();
+  }
+
+  portalRuntime.scanStopRequested = true;
+  await stopPortalScanKeepAwake();
+  appendPortalScanEvent({
+    message: "Stop requested. Closing the portal scan session after the current operation...",
+    status: "info",
+  });
+  updatePortalScanProgress({
+    completedAt: new Date().toISOString(),
+    currentFacilityHefamaaId: null,
+    currentFacilityName: null,
+    message: "Portal scan stop requested. Already captured details are saved and will be skipped on restart.",
+    status: "cancelled",
+  });
+
+  const session = getSession();
+  if (session) {
+    setSession(null);
+    portalRuntime.openingSession = null;
+    const closingSession = closePortalSession(session, 8_000).catch(() => undefined);
+    portalRuntime.closingSession = closingSession.finally(() => {
+      if (portalRuntime.closingSession === closingSession) portalRuntime.closingSession = null;
+    });
+  }
+
+  return getFastPortalFacilitySummary();
+}
+
 export function getPortalFacilityExportRecords() {
-  return readPortalFacilityCache();
+  const listPath = portalFacilityCachePath();
+  const detailsPath = portalFacilityDetailsCachePath();
+  const listMtimeMs = fileMtimeMs(listPath);
+  const detailsMtimeMs = fileMtimeMs(detailsPath);
+
+  if (portalFacilityExportCache?.path === listPath && portalFacilityExportCache.mtimeMs === listMtimeMs && portalFacilityExportCache.detailsPath === detailsPath && portalFacilityExportCache.detailsMtimeMs === detailsMtimeMs) {
+    return portalFacilityExportCache.value;
+  }
+
+  const records = mergePortalFacilityDetails(readPortalFacilityCache());
+  portalFacilityExportCache = { path: listPath, mtimeMs: listMtimeMs, detailsPath, detailsMtimeMs, value: records };
+  return records;
 }
 
 export function searchPortalFacilityCache(input: {
@@ -1745,7 +3477,7 @@ export function searchPortalFacilityCache(input: {
   status?: string;
   year?: number;
 } = {}) {
-  const records = readPortalFacilityCache();
+  const records = getPortalFacilityExportRecords();
   const query = cleanPortalText(input.query).toLowerCase();
   const category = cleanPortalText(input.category).toLowerCase();
   const status = cleanPortalText(input.status).toLowerCase();
@@ -1775,16 +3507,35 @@ export function searchPortalFacilityCache(input: {
 }
 
 export function getPortalFacilitySummary() {
-  const records = classifyPortalFacilityRecords(readPortalFacilityCache());
+  const listPath = portalFacilityCachePath();
+  const detailsPath = portalFacilityDetailsCachePath();
+  const listMtimeMs = fileMtimeMs(listPath);
+  const detailsMtimeMs = fileMtimeMs(detailsPath);
+
+  if (portalFacilitySummaryCache?.path === listPath
+    && portalFacilitySummaryCache.mtimeMs === listMtimeMs
+    && portalFacilitySummaryCache.detailsPath === detailsPath
+    && portalFacilitySummaryCache.detailsMtimeMs === detailsMtimeMs) {
+    return getFastPortalFacilitySummary();
+  }
+
+  if (portalRuntime.scanProgress.status === "running" && portalFacilitySummaryCache?.value) {
+    return getFastPortalFacilitySummary();
+  }
+
+  // Cache files changed or no summary exists yet, so rebuild the data snapshot.
+  const detailRecords = readPortalFacilityDetailsCache();
+  const records = classifyPortalFacilityRecords(getPortalFacilityExportRecords());
   const latestFacilities = latestUniqueFacilityRecords(records);
   const lastScanned = records[0]?.lastSeen ?? null;
-
-  return {
+  const summary = {
     totalFacilities: latestFacilities.length,
     totalPortalRecords: records.length,
     portalReportedRecords: portalRuntime.scanProgress.portalReportedRecords ?? (records.length || null),
     categoryCounts: countByCategory(latestFacilities),
     categoryPortalRecordCounts: countByCategory(records),
+    detailLastCaptured: lastDetailCapturedAt(detailRecords),
+    detailRecords: detailRecords.length,
     applicationTypeCounts: countByApplicationType(records),
     facilityTypeCounts: countByFacilityType(records),
     statusCounts: summarizeStatus(latestFacilities),
@@ -1796,7 +3547,10 @@ export function getPortalFacilitySummary() {
     yearlyPortalRecordCounts: countByYear(records),
     yearlyRenewalCounts: countByYear(records, "renewal"),
     note: records.length === 0 ? "No cached portal facilities found. Run portal scan first." : undefined,
-  };
+  } satisfies PortalFacilitySummary;
+
+  portalFacilitySummaryCache = { path: listPath, mtimeMs: listMtimeMs, detailsPath, detailsMtimeMs, value: summary };
+  return summary;
 }
 
 function normalizeSelectionName(value: string) {
@@ -1882,6 +3636,33 @@ async function openFacilityResult(page: Page, rowIndex: number) {
   }, rowIndex);
 }
 
+async function waitForFacilityRecordReady(page: Page, facilityName = "", timeoutMs = 2_500) {
+  const targetName = cleanPortalText(facilityName).toLowerCase();
+
+  await Promise.race([
+    page.waitForLoadState("domcontentloaded", { timeout: timeoutMs }).catch(() => undefined),
+    page.waitForFunction(
+      ({ targetName }) => {
+        const body = document.body?.innerText ?? "";
+        const lowerBody = body.toLowerCase();
+        const targetVisible = !targetName || lowerBody.includes(targetName);
+        const hasDetailKeyword = /admin activ|registration approval|professional staff|facility information|owner|director|license|licence|approval/i.test(body);
+        const visibleDialog = Array.from(document.querySelectorAll<HTMLElement>(".modal,.modal-dialog,[role='dialog']")).some((element) => {
+          const style = window.getComputedStyle(element);
+          const rect = element.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        });
+
+        return targetVisible && (hasDetailKeyword || visibleDialog);
+      },
+      { targetName },
+      { timeout: timeoutMs },
+    ).catch(() => undefined),
+  ]).catch(() => undefined);
+
+  await page.waitForTimeout(250).catch(() => undefined);
+}
+
 function getApprovalEvidence(pageText: string, selectedRenewalYear: number | null) {
   const lines = pageText
     .split(/\n+/)
@@ -1953,16 +3734,31 @@ export async function openPortal() {
   const currentSession = getSession();
 
   if (currentSession && !currentSession.page.isClosed()) {
-    const { page, storageStatePath } = await openPortalTab({ fastOpen: true });
+    const { page } = await openPortalTab({ fastOpen: true });
     return {
       status: "opened",
       url: page.url(),
       requiresManualLogin: true,
       persistentProfile: true,
       browserChannel: browserChannelLabel(currentSession.browserChannel ?? getPortalBrowserChannel()),
-      profileName: storageStateName(storageStatePath ?? getPortalStorageStatePath()),
+      profileName: profileName(currentSession.profileDir),
       note: "HEFAMAA portal browser is already active and has been brought to the front.",
     };
+  }
+
+  if (await portalDebuggingEndpointReady(getPortalDebuggingPort())) {
+    const session = await ensureSession({ fastOpen: true }).catch(() => null);
+    if (session && !session.page.isClosed()) {
+      return {
+        status: "opened",
+        url: session.page.url(),
+        requiresManualLogin: true,
+        persistentProfile: true,
+        browserChannel: browserChannelLabel(session.browserChannel ?? getPortalBrowserChannel()),
+        profileName: profileName(session.profileDir),
+        note: "Reconnected to the existing HEFAMAA portal Chrome window and brought it to the front.",
+      };
+    }
   }
 
   if (!portalRuntime.openingSession) {
@@ -1983,39 +3779,42 @@ export async function openPortal() {
     requiresManualLogin: true,
     persistentProfile: true,
     browserChannel: browserChannelLabel(getPortalBrowserChannel()),
-    profileName: storageStateName(getPortalStorageStatePath()),
+    profileName: profileName(getPortalProfileDir()),
     note: "HEFAMAA portal browser launch requested. The dedicated portal window is opening in the background; log in manually if requested. Search and capture will reuse it when ready.",
   };
 }
 
 export async function getPortalSessionStatus() {
   let currentSession = getSession();
+  const debuggingReady = await portalDebuggingEndpointReady(getPortalDebuggingPort());
 
-  if ((!currentSession || currentSession.page.isClosed()) && (await portalDebuggingEndpointReady(getPortalDebuggingPort()))) {
+  if ((!currentSession || currentSession.page.isClosed()) && debuggingReady) {
     currentSession = await ensureSession({ fastOpen: true }).catch(() => null);
   }
 
   const opening = Boolean(portalRuntime.openingSession);
   const active = Boolean(currentSession && !currentSession.page.isClosed());
+  const reusableDedicatedBrowser = !active && debuggingReady;
   const profileDir = currentSession?.profileDir ?? getPortalProfileDir();
-  const storageStatePath = currentSession?.storageStatePath ?? getPortalStorageStatePath();
   const lock = getPortalProfileLock(profileDir);
 
   return {
-    status: active ? "active" : opening ? "opening" : "closed",
+    status: active ? "active" : opening || reusableDedicatedBrowser ? "opening" : "closed",
     url: active ? currentSession?.page.url() : null,
     browserChannel: browserChannelLabel(currentSession?.browserChannel ?? getPortalBrowserChannel()),
     persistentProfile: true,
-    profileName: storageStateName(storageStatePath),
-    profileLocked: !active && !opening && lock.locked,
-    profileLockPid: !active && !opening ? lock.pid : undefined,
+    profileName: profileName(profileDir),
+    profileLocked: !active && !opening && !debuggingReady && lock.locked,
+    profileLockPid: !active && !opening && !debuggingReady ? lock.pid : undefined,
     note: active
-      ? "Portal browser session is active. Login cookies will be saved to local storage state when you search, capture, or close the portal."
-      : opening
-        ? "Dedicated portal browser is starting in the background. It will reuse the saved HEFAMAA profile and become available for search and capture shortly."
-      : lock.locked
-        ? `An old persistent portal profile is still open${lock.pid ? ` in process ${lock.pid}` : ""}, but the current agent now uses storage state instead.`
-      : "Portal browser is closed. Opening it will reuse the saved storage state if the portal session is still valid.",
+      ? "Portal browser session is active. Search, capture, quick scan, and full scan will reuse this dedicated HEFAMAA Chrome window."
+      : reusableDedicatedBrowser
+        ? "Dedicated HEFAMAA portal Chrome is running and reachable. The agent will reconnect to it automatically."
+        : opening
+          ? "Dedicated portal browser is starting in the background. It will reuse the saved HEFAMAA profile and become available for search and capture shortly."
+          : lock.locked
+            ? `Portal profile is locked${lock.pid ? ` by process ${lock.pid}` : ""}. If this is the old HEFAMAA portal Chrome window, close it or use Release Lock before opening again.`
+            : "Portal browser is closed. Opening it will reuse the saved HEFAMAA profile if the portal session is still valid.",
   };
 }
 
@@ -2087,7 +3886,7 @@ export async function searchFacility({ facilityName }: SearchFacilityInput) {
     : false;
 
   if (clickedSelectedRecord) {
-    await page.waitForTimeout(4_000);
+    await waitForFacilityRecordReady(page, selection.selectedRecord.facilityName || query, 2_500);
   }
 
   const openedText = await getVisibleText(page);
@@ -2149,7 +3948,7 @@ export async function openSearchResultRecord({ rowIndex }: OpenSearchResultInput
 
   const clickedSelectedRecord = await openFacilityResult(page, rowIndex).catch(() => false);
   if (clickedSelectedRecord) {
-    await page.waitForTimeout(4_000);
+    await waitForFacilityRecordReady(page, selectedRecord.facilityName || query, 2_500);
   }
 
   const openedText = await getVisibleText(page);

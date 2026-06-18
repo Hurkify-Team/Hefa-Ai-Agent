@@ -77,7 +77,7 @@ async function fetchApi<T>(url: string, init?: RequestInit) {
 
 function statusClasses(status: ConfigStatus) {
   if (status === "configured") {
-    return "bg-emerald-100 text-emerald-800";
+    return "bg-blue-100 text-blue-800";
   }
 
   if (status === "error") {
@@ -230,7 +230,7 @@ export default function SettingsPage() {
           {healthCards.map(({ icon: Icon, ...card }) => (
             <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" key={card.title}>
               <div className="mb-4 flex items-start justify-between gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
+                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
                   <Icon className="h-5 w-5" />
                 </span>
                 <StatusBadge status={card.status} />
@@ -252,7 +252,7 @@ export default function SettingsPage() {
         <div className="grid gap-5 2xl:grid-cols-[1.15fr_0.85fr]">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              <FileKey2 className="h-5 w-5 text-emerald-600" />
+              <FileKey2 className="h-5 w-5 text-blue-600" />
               <h2 className="text-[17px] font-bold text-slate-950">Environment Configuration</h2>
             </div>
 
@@ -284,14 +284,14 @@ export default function SettingsPage() {
           <section className="space-y-5">
             <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
-                <RefreshCw className="h-5 w-5 text-emerald-700" />
+                <RefreshCw className="h-5 w-5 text-blue-700" />
                 <h2 className="text-[17px] font-bold text-slate-950">Workbook Cache</h2>
               </div>
               <p className="text-[13px] leading-6 text-slate-600">
                 Clears the short server-side workbook cache after direct edits in Google Drive.
               </p>
               <button
-                className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-[13px] font-bold text-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 text-[13px] font-bold text-blue-800 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                 disabled={isRefreshingWorkbook}
                 onClick={() => void refreshWorkbookCache()}
                 type="button"
@@ -315,7 +315,7 @@ export default function SettingsPage() {
                 Sends a small server-side request to Gemini and returns only the connection status.
               </p>
               <button
-                className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="mt-4 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 disabled={isTestingGemini}
                 onClick={() => void testGemini()}
                 type="button"
@@ -328,7 +328,7 @@ export default function SettingsPage() {
                 <div
                   className={`mt-4 rounded-lg border px-4 py-3 ${
                     geminiResult.success
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                      ? "border-blue-200 bg-blue-50 text-blue-900"
                       : "border-amber-200 bg-amber-50 text-amber-900"
                   }`}
                 >

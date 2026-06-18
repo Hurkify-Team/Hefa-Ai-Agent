@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Database, Loader2, RefreshCw, ShieldCheck, TableProperties } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, Loader2, RefreshCw, ShieldCheck, Sparkles, TableProperties, XCircle } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
 import type { SheetRowValue, SheetTab } from "@/types/sheet";
@@ -75,6 +75,14 @@ type ApplyPhoneNormalizationFixResult = PhoneNormalizationAnalysis & {
   updatedCells: number;
 };
 
+type PendingFixApproval = {
+  kind: "serial" | "phone";
+  title: string;
+  problem: string;
+  suggestedFix: string;
+  impact: string;
+  issueCount: number;
+};
 
 type DataQualityIssueType =
   | "missing_required_field"
@@ -180,6 +188,8 @@ export default function DataCleaningPage() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isAnalyzingPhones, setIsAnalyzingPhones] = useState(false);
   const [isScanningQuality, setIsScanningQuality] = useState(false);
+  const [isDetectingAll, setIsDetectingAll] = useState(false);
+  const [pendingFix, setPendingFix] = useState<PendingFixApproval | null>(null);
   const [isApplying, setIsApplying] = useState(false);
   const [isApplyingPhones, setIsApplyingPhones] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -220,18 +230,22 @@ export default function DataCleaningPage() {
     }
   }
 
-  async function applySerialNumberFixes() {
+  function requestSerialNumberFixes() {
     if (!analysis?.issueCount) return;
 
-    const confirmed = window.confirm(
-      "Apply " +
-        formatNumber(analysis.issueCount) +
-        " S/N fixes to " +
-        (category || "all categories") +
-        "? This will update the connected Google Sheet.",
-    );
+    const affectedCategories = analysis.categories.filter((item) => item.issueCount > 0).length;
+    setPendingFix({
+      kind: "serial",
+      title: "Approve S/N numbering fixes",
+      problem: formatNumber(analysis.issueCount) + " S/N cells are blank, out of sequence, or attached to empty rows across " + formatNumber(affectedCategories) + " affected categories.",
+      suggestedFix: "Renumber non-empty facility rows sequentially from 1 and clear S/N values on empty facility rows.",
+      impact: "This will update only detected S/N cells in " + (category || "all categories") + ". Other facility data will not be changed.",
+      issueCount: analysis.issueCount,
+    });
+  }
 
-    if (!confirmed) return;
+  async function applySerialNumberFixes() {
+    if (!analysis?.issueCount) return;
 
     setIsApplying(true);
     setError(null);
@@ -244,6 +258,7 @@ export default function DataCleaningPage() {
       });
       setApplyResult(result);
       setAnalysis(result);
+      setPendingFix(null);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Unable to apply S/N numbering fixes");
     } finally {
@@ -276,18 +291,22 @@ export default function DataCleaningPage() {
     }
   }
 
-  async function applyPhoneNormalizationFixes() {
+  function requestPhoneNormalizationFixes() {
     if (!phoneAnalysis?.issueCount) return;
 
-    const confirmed = window.confirm(
-      "Apply " +
-        formatNumber(phoneAnalysis.issueCount) +
-        " phone/contact fixes to " +
-        (category || "all categories") +
-        "? This will update the connected Google Sheet.",
-    );
+    const affectedCategories = phoneAnalysis.categories.filter((item) => item.issueCount > 0).length;
+    setPendingFix({
+      kind: "phone",
+      title: "Approve phone/contact formatting fixes",
+      problem: formatNumber(phoneAnalysis.issueCount) + " contact values have formatting issues across " + formatNumber(affectedCategories) + " affected categories.",
+      suggestedFix: "Normalize safe phone/contact values by removing separators, applying local prefix rules, and keeping multiple numbers readable.",
+      impact: "This will update only detected contact cells in " + (category || "all categories") + ". Facility names, addresses, and other fields will not be changed.",
+      issueCount: phoneAnalysis.issueCount,
+    });
+  }
 
-    if (!confirmed) return;
+  async function applyPhoneNormalizationFixes() {
+    if (!phoneAnalysis?.issueCount) return;
 
     setIsApplyingPhones(true);
     setError(null);
@@ -300,6 +319,7 @@ export default function DataCleaningPage() {
       });
       setPhoneApplyResult(result);
       setPhoneAnalysis(result);
+      setPendingFix(null);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Unable to apply phone/contact fixes");
     } finally {
@@ -327,12 +347,55 @@ export default function DataCleaningPage() {
     }
   }
 
+  async function detectAllIssues() {
+    setIsDetectingAll(true);
+    setError(null);
+    setApplyResult(null);
+    setPhoneApplyResult(null);
+    setPendingFix(null);
+
+    try {
+      const body = JSON.stringify({ category: category || undefined });
+      const [serial, phone, quality] = await Promise.all([
+        fetchApi<SerialNumberAnalysis>("/api/cleaning/serial-numbers/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        }),
+        fetchApi<PhoneNormalizationAnalysis>("/api/cleaning/phone-normalization/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        }),
+        fetchApi<DataQualityAnalysis>("/api/cleaning/data-quality/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        }),
+      ]);
+
+      setAnalysis(serial);
+      setPhoneAnalysis(phone);
+      setQualityAnalysis(quality);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Unable to detect data cleaning issues");
+    } finally {
+      setIsDetectingAll(false);
+    }
+  }
+
+  async function applyPendingFix() {
+    if (!pendingFix) return;
+    if (pendingFix.kind === "serial") await applySerialNumberFixes();
+    if (pendingFix.kind === "phone") await applyPhoneNormalizationFixes();
+  }
+
   const cards = useMemo(
     () => [
       { label: "Scope", value: category || "All categories", icon: Database, className: "bg-blue-50 text-blue-700" },
-      { label: "Categories", value: analysis ? formatNumber(analysis.totalCategories) : "-", icon: TableProperties, className: "bg-emerald-50 text-emerald-700" },
+      { label: "Categories", value: analysis ? formatNumber(analysis.totalCategories) : "-", icon: TableProperties, className: "bg-blue-50 text-blue-700" },
       { label: "Rows", value: analysis ? formatNumber(analysis.totalRows) : "-", icon: ShieldCheck, className: "bg-slate-100 text-slate-700" },
-      { label: "Fixes", value: analysis ? formatNumber(analysis.issueCount) : "-", icon: AlertTriangle, className: analysis?.issueCount ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700" },
+      { label: "Fixes", value: analysis ? formatNumber(analysis.issueCount) : "-", icon: AlertTriangle, className: analysis?.issueCount ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700" },
     ],
     [analysis, category],
   );
@@ -342,7 +405,7 @@ export default function DataCleaningPage() {
 
   const phoneCards = useMemo(
     () => [
-      { label: "Phone Fixes", value: phoneAnalysis ? formatNumber(phoneAnalysis.issueCount) : "-", className: phoneAnalysis?.issueCount ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700" },
+      { label: "Phone Fixes", value: phoneAnalysis ? formatNumber(phoneAnalysis.issueCount) : "-", className: phoneAnalysis?.issueCount ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700" },
       { label: "Categories", value: phoneAnalysis ? formatNumber(phoneAnalysis.totalCategories) : "-", className: "bg-blue-50 text-blue-700" },
       { label: "Rows Checked", value: phoneAnalysis ? formatNumber(phoneAnalysis.totalRows) : "-", className: "bg-slate-100 text-slate-700" },
       { label: "Affected Sheets", value: phoneAnalysis ? formatNumber(phoneAnalysis.categories.filter((item) => item.issueCount > 0).length) : "-", className: "bg-violet-50 text-violet-700" },
@@ -355,7 +418,7 @@ export default function DataCleaningPage() {
 
   const qualityCards = useMemo(
     () => [
-      { label: "Quality Issues", value: qualityAnalysis ? formatNumber(qualityAnalysis.issueCount) : "-", className: qualityAnalysis?.issueCount ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700" },
+      { label: "Quality Issues", value: qualityAnalysis ? formatNumber(qualityAnalysis.issueCount) : "-", className: qualityAnalysis?.issueCount ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700" },
       { label: "Missing Fields", value: qualityAnalysis ? formatNumber(qualityAnalysis.missingRequiredFields) : "-", className: "bg-rose-50 text-rose-700" },
       { label: "Bad Contacts", value: qualityAnalysis ? formatNumber(qualityAnalysis.invalidPhones + qualityAnalysis.invalidEmails) : "-", className: "bg-blue-50 text-blue-700" },
       { label: "Duplicate Warnings", value: qualityAnalysis ? formatNumber(qualityAnalysis.duplicateWarnings) : "-", className: "bg-violet-50 text-violet-700" },
@@ -374,25 +437,53 @@ export default function DataCleaningPage() {
             <h1 className="text-[28px] font-extrabold tracking-[-0.03em] text-slate-950">Data Cleaning Agent</h1>
             <p className="mt-1 text-[14px] text-slate-600">Preview and apply safe cleaning tasks across all HEFAMAA categories</p>
           </div>
-          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-[12px] font-bold text-emerald-700">Preview before write</span>
+          <div className="flex flex-wrap gap-2">
+            <button className="flex h-9 items-center gap-2 rounded-full border border-blue-200 bg-blue-600 px-4 text-[12px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300" disabled={isDetectingAll || isAnalyzing || isAnalyzingPhones || isScanningQuality || isApplying || isApplyingPhones} onClick={() => void detectAllIssues()} type="button">
+              {isDetectingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Detect All Issues
+            </button>
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-[12px] font-bold text-blue-700">Preview before write</span>
+          </div>
         </div>
 
         <form className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" onSubmit={analyzeSerialNumbers}>
           <div className="grid gap-3 xl:grid-cols-[240px_1fr_auto]">
-            <select className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100" disabled={isLoadingTabs || isAnalyzing || isApplying} onChange={(event) => setCategory(event.target.value)} value={category}>
+            <select className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" disabled={isLoadingTabs || isAnalyzing || isApplying} onChange={(event) => setCategory(event.target.value)} value={category}>
               <option value="">All categories</option>
               {tabs.map((tab) => <option key={tab.title} value={tab.title}>{tab.title}</option>)}
             </select>
             <div className="flex min-h-11 items-center rounded-lg border border-slate-200 bg-slate-50 px-4 text-[13px] font-semibold text-slate-600">Current task: fix S/N numbering by numbering non-empty facility rows sequentially from 1.</div>
-            <button className="flex h-11 min-w-[150px] items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300" disabled={isAnalyzing || isApplying} type="submit">
+            <button className="flex h-11 min-w-[150px] items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300" disabled={isAnalyzing || isApplying} type="submit">
               {isAnalyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Analyze S/N
             </button>
           </div>
 
           {error ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-[13px] font-semibold text-amber-800"><AlertTriangle className="h-4 w-4" />{error}</p> : null}
-          {applyResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-800"><CheckCircle2 className="h-4 w-4" />Applied {formatNumber(applyResult.updatedCells)} S/N cell updates across {formatNumber(applyResult.categoriesWithSerial)} categories.</p> : null}
+          {applyResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] font-semibold text-blue-800"><CheckCircle2 className="h-4 w-4" />Applied {formatNumber(applyResult.updatedCells)} S/N cell updates across {formatNumber(applyResult.categoriesWithSerial)} categories.</p> : null}
         </form>
+
+        {pendingFix ? (
+          <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="max-w-4xl">
+                <div className="flex items-center gap-2 text-amber-900"><AlertTriangle className="h-5 w-5" /><h2 className="text-[17px] font-extrabold">{pendingFix.title}</h2></div>
+                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                  <div className="rounded-lg bg-white/80 p-3"><p className="text-[11px] font-black uppercase tracking-[0.04em] text-amber-700">Problem detected</p><p className="mt-1 text-[13px] font-semibold leading-5 text-slate-800">{pendingFix.problem}</p></div>
+                  <div className="rounded-lg bg-white/80 p-3"><p className="text-[11px] font-black uppercase tracking-[0.04em] text-amber-700">Suggested fix</p><p className="mt-1 text-[13px] font-semibold leading-5 text-slate-800">{pendingFix.suggestedFix}</p></div>
+                  <div className="rounded-lg bg-white/80 p-3"><p className="text-[11px] font-black uppercase tracking-[0.04em] text-amber-700">Impact</p><p className="mt-1 text-[13px] font-semibold leading-5 text-slate-800">{pendingFix.impact}</p></div>
+                </div>
+              </div>
+              <div className="flex min-w-[220px] flex-col gap-2">
+                <button className="flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white disabled:bg-slate-300" disabled={isApplying || isApplyingPhones} onClick={() => void applyPendingFix()} type="button">
+                  {isApplying || isApplyingPhones ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                  Approve & Apply {formatNumber(pendingFix.issueCount)} Fixes
+                </button>
+                <button className="flex h-10 items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 text-[13px] font-bold text-amber-800" onClick={() => setPendingFix(null)} type="button"><XCircle className="h-4 w-4" />Cancel</button>
+              </div>
+            </div>
+          </section>
+        ) : null}
 
         <div className="grid gap-4 xl:grid-cols-4">
           {cards.map(({ icon: Icon, ...card }) => (
@@ -416,7 +507,7 @@ export default function DataCleaningPage() {
                 <div className="grid grid-cols-[1fr_90px_90px] border-t border-slate-200 px-4 py-3 text-[12px]" key={item.category}>
                   <span className="min-w-0"><span className="block truncate font-bold text-slate-950">{item.category}</span>{item.skippedReason ? <span className="mt-1 block truncate text-[11px] font-semibold text-amber-700">{item.skippedReason}</span> : null}</span>
                   <span className="truncate font-semibold text-slate-700">{item.serialHeader ?? "-"}</span>
-                  <span className={item.issueCount ? "font-extrabold text-amber-700" : "font-semibold text-emerald-700"}>{formatNumber(item.issueCount)}</span>
+                  <span className={item.issueCount ? "font-extrabold text-amber-700" : "font-semibold text-blue-700"}>{formatNumber(item.issueCount)}</span>
                 </div>
               ))}
               {!analysis ? <p className="border-t border-slate-200 p-4 text-[13px] font-semibold text-slate-500">Run analysis to inspect S/N numbering across the workbook.</p> : null}
@@ -426,7 +517,7 @@ export default function DataCleaningPage() {
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-[17px] font-bold text-slate-950">S/N Fix Preview</h2>
-              <button className="flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!analysis?.issueCount || isApplying || isAnalyzing} onClick={() => void applySerialNumberFixes()} type="button">
+              <button className="flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!analysis?.issueCount || isApplying || isAnalyzing} onClick={() => requestSerialNumberFixes()} type="button">
                 {isApplying ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                 Apply Confirmed Fixes
               </button>
@@ -440,7 +531,7 @@ export default function DataCleaningPage() {
                     <span className="truncate font-bold text-slate-950">{issue.category}</span>
                     <span className="font-semibold text-slate-700">{issue.sheetRowNumber}</span>
                     <span className="truncate font-semibold text-rose-700">{displayValue(issue.currentValue)}</span>
-                    <span className="truncate font-semibold text-emerald-700">{issue.expectedValue ?? "blank"}</span>
+                    <span className="truncate font-semibold text-blue-700">{issue.expectedValue ?? "blank"}</span>
                     <span className="truncate text-slate-600">{issue.reason === "renumber" ? "Renumber" : "Clear blank row"}</span>
                   </div>
                 ))}
@@ -461,18 +552,18 @@ export default function DataCleaningPage() {
               <p className="mt-1 text-[13px] text-slate-600">Preview safe contact formatting fixes before updating the connected Google Sheet.</p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className="flex h-10 min-w-[155px] items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-[13px] font-bold text-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400" disabled={isAnalyzingPhones || isApplyingPhones || isApplying} onClick={() => void analyzePhoneNormalization()} type="button">
+              <button className="flex h-10 min-w-[155px] items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 text-[13px] font-bold text-blue-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400" disabled={isAnalyzingPhones || isApplyingPhones || isApplying} onClick={() => void analyzePhoneNormalization()} type="button">
                 {isAnalyzingPhones ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 Analyze Phones
               </button>
-              <button className="flex h-10 min-w-[150px] items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!phoneAnalysis?.issueCount || isApplyingPhones || isAnalyzingPhones} onClick={() => void applyPhoneNormalizationFixes()} type="button">
+              <button className="flex h-10 min-w-[150px] items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={!phoneAnalysis?.issueCount || isApplyingPhones || isAnalyzingPhones} onClick={() => requestPhoneNormalizationFixes()} type="button">
                 {isApplyingPhones ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                 Apply Phone Fixes
               </button>
             </div>
           </div>
 
-          {phoneApplyResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-800"><CheckCircle2 className="h-4 w-4" />Applied {formatNumber(phoneApplyResult.updatedCells)} phone/contact updates.</p> : null}
+          {phoneApplyResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] font-semibold text-blue-800"><CheckCircle2 className="h-4 w-4" />Applied {formatNumber(phoneApplyResult.updatedCells)} phone/contact updates.</p> : null}
 
           <div className="mt-5 grid gap-4 xl:grid-cols-4">
             {phoneCards.map((card) => (
@@ -490,7 +581,7 @@ export default function DataCleaningPage() {
                 <div className="grid grid-cols-[1fr_100px_90px] border-t border-slate-200 px-4 py-3 text-[12px]" key={item.category}>
                   <span className="min-w-0"><span className="block truncate font-bold text-slate-950">{item.category}</span>{item.skippedReason ? <span className="mt-1 block truncate text-[11px] font-semibold text-amber-700">{item.skippedReason}</span> : null}</span>
                   <span className="truncate font-semibold text-slate-700">{item.contactHeader ?? "-"}</span>
-                  <span className={item.issueCount ? "font-extrabold text-amber-700" : "font-semibold text-emerald-700"}>{formatNumber(item.issueCount)}</span>
+                  <span className={item.issueCount ? "font-extrabold text-amber-700" : "font-semibold text-blue-700"}>{formatNumber(item.issueCount)}</span>
                 </div>
               ))}
               {!phoneAnalysis ? <p className="border-t border-slate-200 p-4 text-[13px] font-semibold text-slate-500">Run analysis to find contact values that can be safely normalized.</p> : null}
@@ -504,11 +595,11 @@ export default function DataCleaningPage() {
                   <span className="min-w-0"><span className="block truncate font-bold text-slate-950">{issue.facilityName || issue.category}</span><span className="mt-1 block truncate text-[11px] font-semibold text-slate-500">{issue.category}</span></span>
                   <span className="font-semibold text-slate-700">{issue.sheetRowNumber}</span>
                   <span className="truncate font-semibold text-rose-700" title={issue.currentValue}>{issue.currentValue}</span>
-                  <span className="truncate font-semibold text-emerald-700" title={issue.normalizedValue}>{issue.normalizedValue}</span>
+                  <span className="truncate font-semibold text-blue-700" title={issue.normalizedValue}>{issue.normalizedValue}</span>
                   <span className="truncate text-slate-600">{formatPhoneReason(issue.reason)}</span>
                 </div>
               ))}
-              {!phoneAnalysis ? null : phoneVisibleIssues.length ? null : <p className="border-t border-slate-200 p-4 text-[13px] font-semibold text-emerald-700">No safe phone/contact formatting fixes found.</p>}
+              {!phoneAnalysis ? null : phoneVisibleIssues.length ? null : <p className="border-t border-slate-200 p-4 text-[13px] font-semibold text-blue-700">No safe phone/contact formatting fixes found.</p>}
               {phoneAnalysis && phoneAnalysis.issues.length > phoneVisibleIssues.length ? <p className="border-t border-slate-200 p-3 text-[12px] font-semibold text-slate-500">Showing first {formatNumber(phoneVisibleIssues.length)} of {formatNumber(phoneAnalysis.issues.length)} phone fixes.</p> : null}
             </div>
           </div>
@@ -523,7 +614,7 @@ export default function DataCleaningPage() {
               <h2 className="text-[18px] font-bold text-slate-950">Data Quality Scan</h2>
               <p className="mt-1 text-[13px] text-slate-600">Review missing key fields, bad contact formats, and duplicate identities across the selected scope.</p>
             </div>
-            <button className="flex h-10 min-w-[170px] items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 text-[13px] font-bold text-emerald-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400" disabled={isScanningQuality || isAnalyzing || isApplying} onClick={() => void analyzeDataQuality()} type="button">
+            <button className="flex h-10 min-w-[170px] items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 text-[13px] font-bold text-blue-700 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400" disabled={isScanningQuality || isAnalyzing || isApplying} onClick={() => void analyzeDataQuality()} type="button">
               {isScanningQuality ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               Analyze Quality
             </button>
@@ -565,7 +656,7 @@ export default function DataCleaningPage() {
                   <span className="truncate font-semibold text-slate-900" title={displayValue(issue.value)}>{displayValue(issue.value)}</span>
                 </div>
               ))}
-              {!qualityAnalysis ? null : qualityVisibleIssues.length ? null : <p className="border-t border-slate-200 p-4 text-[13px] font-semibold text-emerald-700">No data quality issues found for the selected scope.</p>}
+              {!qualityAnalysis ? null : qualityVisibleIssues.length ? null : <p className="border-t border-slate-200 p-4 text-[13px] font-semibold text-blue-700">No data quality issues found for the selected scope.</p>}
               {qualityAnalysis && qualityAnalysis.issues.length > qualityVisibleIssues.length ? <p className="border-t border-slate-200 p-3 text-[12px] font-semibold text-slate-500">Showing first {formatNumber(qualityVisibleIssues.length)} of {formatNumber(qualityAnalysis.issues.length)} quality issues.</p> : null}
             </div>
           </div>

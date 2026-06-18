@@ -1,7 +1,7 @@
 import type { DatabaseQuestionResult } from "@/types/ai";
 import type { SheetRow } from "@/types/sheet";
 import { checkDuplicateFacility } from "@/lib/duplicateChecker";
-import { getSourceAllSheetData, isWorkbookSourceConfigured, WORKBOOK_SOURCE_LABELS, type WorkbookSource } from "@/lib/workbookSources";
+import { getSourceAllSheetData, isWorkbookSourceConfigured, readSourceExistingRecords, readSourceSheetTabs, WORKBOOK_SOURCE_LABELS, type WorkbookSource } from "@/lib/workbookSources";
 import {
   normalizeEmail,
   normalizeFacilityName,
@@ -16,9 +16,16 @@ type SearchFacilitiesInput = {
   limit?: number;
 };
 
+export type HefamaaNumberLookupResult = {
+  query: string;
+  bestMatch: FacilitySearchResult | null;
+  matches: FacilitySearchResult[];
+  searchedSources: WorkbookSource[];
+};
+
 export const FIELD_ALIASES = {
-  hefNo: ["HEF/NO", "HEF NO", "REG NO", "Registration Number"],
-  facilityName: ["Facility Name", "FACILITY NAME", "Name"],
+  hefNo: ["HEF/NO", "HEF NO", "HEFAMAA NO", "HF NO", "REG NO", "Registration Number", "Registration No", "Facility Code", "FACILITY CODE", "FacilityCode", "Code"],
+  facilityName: ["Facility Name", "FACILITY NAME", "Name", "Name of Facility", "FACILITY", "Facility"],
   address: ["Address", "ADDRESS", "Facility Address"],
   lga: ["LGA", "Local Government"],
   contact: ["Contact", "Phone", "Phone Number", "Phone No", "PHONE NO", "Telephone"],
@@ -39,6 +46,7 @@ export type FacilitySearchResult = {
   contact: string;
   email: string;
   row: SheetRow;
+  matchScore?: number;
 };
 
 export type WorkbookReportSummary = {
@@ -97,6 +105,74 @@ function rowSearchText(category: string, row: SheetRow) {
     .toLowerCase();
 }
 
+const FACILITY_LOOKUP_STOP_WORDS = new Set([
+  "what",
+  "is",
+  "the",
+  "me",
+  "please",
+  "kindly",
+  "for",
+  "of",
+  "number",
+  "no",
+  "code",
+  "hefamaa",
+  "hef",
+  "facility",
+]);
+
+function searchTokens(value: string) {
+  return normalizeFacilityName(value)
+    .replace(/[^a-z0-9/]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1 && !FACILITY_LOOKUP_STOP_WORDS.has(token));
+}
+
+function facilityMatchScore(input: {
+  address: string;
+  category: string;
+  contact: string;
+  email: string;
+  facilityName: string;
+  hefNo: string;
+  lga: string;
+  rowText: string;
+}, query: string) {
+  const normalizedQuery = normalizeFacilityName(query);
+  const lowerQuery = query.trim().toLowerCase();
+  const normalizedName = normalizeFacilityName(input.facilityName);
+  const normalizedRowText = normalizeFacilityName(input.rowText);
+  const normalizedQueryPhone = normalizePhoneNumber(query);
+  const normalizedContact = normalizePhoneNumber(input.contact);
+  const lowerHefNo = input.hefNo.toLowerCase();
+
+  if (!normalizedQuery) return 0;
+  if (normalizedName === normalizedQuery) return 120;
+  if (lowerHefNo && lowerHefNo === lowerQuery) return 118;
+  if (normalizedQueryPhone && normalizedContact === normalizedQueryPhone) return 116;
+  if (normalizedName.includes(normalizedQuery)) return 105;
+  if (normalizedRowText.includes(normalizedQuery)) return 90;
+  if (lowerHefNo && lowerHefNo.includes(lowerQuery)) return 88;
+
+  const queryTokens = searchTokens(query);
+  if (!queryTokens.length) return 0;
+
+  const nameHits = queryTokens.filter((token) => normalizedName.includes(token)).length;
+  const rowHits = queryTokens.filter((token) => normalizedRowText.includes(token)).length;
+
+  if (nameHits === queryTokens.length) return 84 + nameHits;
+  if (rowHits === queryTokens.length) return 70 + nameHits * 2;
+
+  const hitRatio = rowHits / queryTokens.length;
+  if (queryTokens.length >= 2 && hitRatio >= 0.66) {
+    return 45 + Math.round(hitRatio * 10) + nameHits;
+  }
+
+  return 0;
+}
+
 function rowIsIncomplete(row: SheetRow) {
   const requiredValues = [
     valueFor(row, FIELD_ALIASES.facilityName),
@@ -135,19 +211,25 @@ function cleanLookupQuery(value: string) {
     .trim();
 }
 
-function extractHefamaaNumberLookupQuery(question: string) {
+export function extractHefamaaNumberLookupQuery(question: string) {
+  const withoutPolitePrefix = question
+    .replace(/^(?:please|kindly)\s+/i, "")
+    .replace(/[?.!]+$/g, "")
+    .trim();
   const patterns = [
-    /(?:hefamaa|hef\/?no|hef\s*no|registration)\s*(?:number|no)?\s+(?:for|of)\s+(.+)$/i,
-    /(?:what(?:'s|\s+is)?|find|show|tell\s+me)\s+(?:the\s+)?(?:hefamaa|hef\/?no|hef\s*no|registration)\s*(?:number|no)?\s+(?:for|of)\s+(.+)$/i,
+    /(?:hefamaa|hef\/?no|hef\s*no|registration|facility\s+code)\s*(?:number|no|code)?\s+(?:for|of)\s+(.+)$/i,
+    /(?:what(?:'s|\s+is)?|find|show|tell\s+me|provide|give)\s+(?:me\s+)?(?:the\s+)?(?:hefamaa|hef\/?no|hef\s*no|registration|facility\s+code)\s*(?:number|no|code)?\s+(?:for|of)\s+(.+)$/i,
+    /(?:what(?:'s|\s+is)?|find|show|tell\s+me|provide|give)\s+(?:me\s+)?(.+?)\s+(?:hefamaa|hef\/?no|hef\s*no|registration|facility\s+code)\s*(?:number|no|code)?$/i,
+    /(.+?)\s+(?:hefamaa|hef\/?no|hef\s*no|registration|facility\s+code)\s*(?:number|no|code)?$/i,
   ];
 
   for (const pattern of patterns) {
-    const match = question.match(pattern);
+    const match = withoutPolitePrefix.match(pattern);
     if (match?.[1]) return cleanLookupQuery(match[1]);
   }
 
-  if (/\bhef(?:amaa)?\b|hef\/?no|registration/i.test(question) && /\b(number|no)\b/i.test(question)) {
-    const parts = question.split(/\b(?:for|of)\b/i);
+  if (/\b(?:hefamaa|hef|registration|facility\s+code)\b|hef\/?no/i.test(withoutPolitePrefix) && /\b(number|no|code)\b/i.test(withoutPolitePrefix)) {
+    const parts = withoutPolitePrefix.split(/\b(?:for|of)\b/i);
     if (parts.length > 1) return cleanLookupQuery(parts.at(-1) ?? "");
   }
 
@@ -162,35 +244,34 @@ export async function answerDatabaseQuestion(question: string, category?: string
   const hefamaaLookupQuery = extractHefamaaNumberLookupQuery(question);
 
   if (hefamaaLookupQuery) {
-    const matches = await searchFacilitiesAcrossSources({ query: hefamaaLookupQuery, category, limit: 8 });
-    const exactMatch = matches.find(
-      (match) => normalizeFacilityName(match.facilityName) === normalizeFacilityName(hefamaaLookupQuery),
-    );
-    const bestMatch = exactMatch ?? matches[0];
+    const lookup = await lookupHefamaaNumberAcrossSources({ query: hefamaaLookupQuery, category, limit: 8 });
+    const bestMatch = lookup.bestMatch;
 
     if (!bestMatch) {
       return {
         question,
-        answer: "No facility matching \"" + hefamaaLookupQuery + "\" was found across the selected workbook data.",
+        answer: "No facility matching \"" + hefamaaLookupQuery + "\" was found in the HEFAMAA Active Database or Old Hefamaa Database fallback.",
       };
     }
+
+    const numberLabel = bestMatch.source === "old" ? "Facility Code" : "HEF/NO";
 
     return {
       question,
       answer: [
-        (bestMatch.facilityName || hefamaaLookupQuery) + " is in " + bestMatch.category + ".",
-        "HEF/NO: " + (bestMatch.hefNo || "Not found") + ".",
-        "Row: " + (bestMatch.rowIndex + 2) + ".",
+        "The HEFAMAA number for " + (bestMatch.facilityName || hefamaaLookupQuery) + " is " + (bestMatch.hefNo || "Not found") + ".",
+        "Source: " + bestMatch.sourceLabel + ", category " + bestMatch.category + ", row " + (bestMatch.rowIndex + 2) + ".",
+        bestMatch.source === "old" ? "This value came from the old database header \"" + numberLabel + "\" because the active database did not provide a HEF/NO for the matched record." : "This value came from the active database HEF/NO column on the same row as the facility name.",
         bestMatch.address ? "Address: " + bestMatch.address + "." : "",
         bestMatch.lga ? "LGA: " + bestMatch.lga + "." : "",
-        bestMatch.contact ? "Contact: " + bestMatch.contact + "." : "",
       ]
         .filter(Boolean)
         .join(" "),
-      rows: matches.map((match) => ({
+      rows: lookup.matches.map((match) => ({
+        Source: match.sourceLabel,
         Category: match.category,
         "Workbook Row": match.rowIndex + 2,
-        "HEF/NO": match.hefNo || null,
+        "HEF/NO / Facility Code": match.hefNo || null,
         "Facility Name": match.facilityName || null,
         Address: match.address || null,
         LGA: match.lga || null,
@@ -260,12 +341,47 @@ export async function answerDatabaseQuestion(question: string, category?: string
 
 type WorkbookSheetData = Record<string, { headers: string[]; rows: SheetRow[] }>;
 
+function categoryTokens(value: string) {
+  return normalizeFacilityName(value)
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter((token) => token.length > 2);
+}
+
+function categoryHintScore(tabTitle: string, query: string) {
+  const normalizedTitle = normalizeFacilityName(tabTitle);
+  const normalizedQuery = normalizeFacilityName(query);
+
+  if (!normalizedTitle || !normalizedQuery) return 0;
+  if (normalizedQuery.includes(normalizedTitle)) return 120;
+
+  const titleTokens = categoryTokens(tabTitle);
+  const queryTokens = new Set(categoryTokens(query));
+  if (!titleTokens.length || !queryTokens.size) return 0;
+
+  const hits = titleTokens.filter((token) => queryTokens.has(token)).length;
+  if (!hits) return 0;
+
+  return Math.round((hits / titleTokens.length) * 80) + hits;
+}
+
+async function inferCategoryFromQuery(source: WorkbookSource, query: string) {
+  const tabs = await readSourceSheetTabs(source);
+  const ranked = tabs
+    .map((tab) => ({ title: tab.title, score: categoryHintScore(tab.title, query) }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
+
+  return ranked[0]?.title ?? null;
+}
+
 function searchFacilitiesInData(
   sheets: WorkbookSheetData,
   input: SearchFacilitiesInput,
   source: WorkbookSource,
 ): FacilitySearchResult[] {
-  const query = input.query.trim().toLowerCase();
+  const query = input.query.trim();
 
   if (!query) {
     return [];
@@ -279,7 +395,25 @@ function searchFacilitiesInData(
     if (!sheet) continue;
 
     sheet.rows.forEach((row, rowIndex) => {
-      if (!rowSearchText(category, row).includes(query)) return;
+      const hefNo = valueFor(row, FIELD_ALIASES.hefNo);
+      const facilityName = valueFor(row, FIELD_ALIASES.facilityName);
+      const address = valueFor(row, FIELD_ALIASES.address);
+      const lga = valueFor(row, FIELD_ALIASES.lga);
+      const contact = valueFor(row, FIELD_ALIASES.contact);
+      const email = valueFor(row, FIELD_ALIASES.email);
+      const rowText = rowSearchText(category, row);
+      const matchScore = facilityMatchScore({
+        address,
+        category,
+        contact,
+        email,
+        facilityName,
+        hefNo,
+        lga,
+        rowText,
+      }, query);
+
+      if (matchScore <= 0) return;
 
       matches.push({
         source,
@@ -287,13 +421,14 @@ function searchFacilitiesInData(
         legacyOnly: source === "old",
         category,
         rowIndex,
-        hefNo: valueFor(row, FIELD_ALIASES.hefNo),
-        facilityName: valueFor(row, FIELD_ALIASES.facilityName),
-        address: valueFor(row, FIELD_ALIASES.address),
-        lga: valueFor(row, FIELD_ALIASES.lga),
-        contact: valueFor(row, FIELD_ALIASES.contact),
-        email: valueFor(row, FIELD_ALIASES.email),
+        hefNo,
+        facilityName,
+        address,
+        lga,
+        contact,
+        email,
         row,
+        matchScore,
       });
     });
   }
@@ -302,14 +437,18 @@ function searchFacilitiesInData(
 }
 
 function sortFacilityMatches(matches: FacilitySearchResult[], query: string) {
+  const normalizedQuery = normalizeFacilityName(query);
+  const lowerQuery = query.trim().toLowerCase();
+
   return matches.sort((a, b) => {
     const aName = normalizeFacilityName(a.facilityName);
     const bName = normalizeFacilityName(b.facilityName);
-    const aExact = aName === query || a.hefNo.toLowerCase() === query ? 1 : 0;
-    const bExact = bName === query || b.hefNo.toLowerCase() === query ? 1 : 0;
+    const aExact = aName === normalizedQuery || a.hefNo.toLowerCase() === lowerQuery ? 1 : 0;
+    const bExact = bName === normalizedQuery || b.hefNo.toLowerCase() === lowerQuery ? 1 : 0;
+    const scorePriority = (b.matchScore ?? 0) - (a.matchScore ?? 0);
     const sourcePriority = (a.source === "active" ? 0 : 1) - (b.source === "active" ? 0 : 1);
 
-    return bExact - aExact || sourcePriority || a.category.localeCompare(b.category) || aName.localeCompare(bName);
+    return bExact - aExact || scorePriority || sourcePriority || a.category.localeCompare(b.category) || aName.localeCompare(bName);
   });
 }
 
@@ -318,6 +457,21 @@ export async function searchFacilitiesInSource(
   input: SearchFacilitiesInput,
 ): Promise<FacilitySearchResult[]> {
   const limit = input.limit ?? 75;
+
+  if (input.category) {
+    const sheet = await readSourceExistingRecords(source, input.category);
+    return searchFacilitiesInData(
+      {
+        [sheet.category]: {
+          headers: sheet.headers,
+          rows: sheet.rows,
+        },
+      },
+      { ...input, category: sheet.category },
+      source,
+    ).slice(0, limit);
+  }
+
   const sheets = await getSourceAllSheetData(source);
 
   return searchFacilitiesInData(sheets, input, source).slice(0, limit);
@@ -350,6 +504,52 @@ export async function searchFacilitiesAcrossSources(input: SearchFacilitiesInput
   }
 
   return sortFacilityMatches(oldMatches, query).slice(0, limit);
+}
+
+function bestHefamaaNumberMatch(matches: FacilitySearchResult[], query: string) {
+  const normalizedQuery = normalizeFacilityName(query);
+  const withNumber = matches.filter((match) => match.hefNo.trim());
+  const candidates = withNumber.length ? withNumber : matches;
+
+  return candidates.find((match) => normalizeFacilityName(match.facilityName) === normalizedQuery)
+    ?? candidates.find((match) => normalizeFacilityName(match.facilityName).includes(normalizedQuery))
+    ?? candidates[0]
+    ?? null;
+}
+
+export async function lookupHefamaaNumberAcrossSources(input: SearchFacilitiesInput): Promise<HefamaaNumberLookupResult> {
+  const query = input.query.trim();
+  const limit = input.limit ?? 12;
+  const searchedSources: WorkbookSource[] = ["active"];
+  const activeCategory = input.category ?? await inferCategoryFromQuery("active", query).catch(() => null);
+  const activeInput = activeCategory ? { ...input, category: activeCategory, limit } : { ...input, limit };
+  const activeMatches = await searchFacilitiesInSource("active", activeInput);
+  let oldMatches: FacilitySearchResult[] = [];
+
+  const activeBest = bestHefamaaNumberMatch(sortFacilityMatches(activeMatches, query.toLowerCase()), query);
+
+  if ((!activeBest || !activeBest.hefNo.trim()) && isWorkbookSourceConfigured("old")) {
+    searchedSources.push("old");
+    try {
+      const oldCategory = input.category ?? await inferCategoryFromQuery("old", query).catch(() => activeCategory);
+      oldMatches = await searchFacilitiesInSource("old", oldCategory ? { ...input, category: oldCategory, limit } : { ...input, limit });
+    } catch (error) {
+      console.warn(
+        "Old Hefamaa Database HEF/NO fallback skipped:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  const combined = sortFacilityMatches([...activeMatches, ...oldMatches], query.toLowerCase()).slice(0, limit);
+  const bestMatch = activeBest?.hefNo.trim() ? activeBest : bestHefamaaNumberMatch(combined, query);
+
+  return {
+    query,
+    bestMatch,
+    matches: combined,
+    searchedSources,
+  };
 }
 
 export async function buildWorkbookReportSummary(): Promise<WorkbookReportSummary> {

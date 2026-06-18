@@ -1,0 +1,88 @@
+import { existsSync, readFileSync, statSync } from "fs";
+import path from "path";
+
+export type LightweightPortalFacilityRecord = {
+  applicationType?: string;
+  category?: string;
+  facilityName?: string;
+  hasAction?: boolean;
+  hefamaaId?: string;
+  index?: number;
+  lastSeen?: string;
+  normalizedStatus?: string;
+  recordDate?: string | null;
+  registrationStatus?: string;
+  renewalYear?: number | null;
+  text?: string;
+  visibleFields?: Record<string, string>;
+};
+
+export type LightweightPortalFacilityDetailRecord = {
+  applicationType?: string;
+  bodyText?: string;
+  cacheKey?: string;
+  capturedAt?: string;
+  category?: string;
+  facilityName?: string;
+  fieldIndex?: Record<string, string>;
+  formFields?: unknown[];
+  hefamaaId?: string;
+  normalizedStatus?: string;
+  recordDate?: string | null;
+  registrationStatus?: string;
+  renewalYear?: number | null;
+  sourceRecord?: LightweightPortalFacilityRecord;
+  staffComplement?: Record<string, number>;
+  staffDetails?: Array<{ matchedComplements?: string[]; rowIndex?: number; tableIndex?: number; text?: string; values?: string[] }>;
+  tables?: string[][][];
+  text?: string;
+  url?: string;
+  visibleFields?: Record<string, string>;
+};
+
+type FileCache<T> = { mtimeMs: number; path: string; value: T };
+
+let listCache: FileCache<LightweightPortalFacilityRecord[]> | null = null;
+let detailsCache: FileCache<LightweightPortalFacilityDetailRecord[]> | null = null;
+
+function cachePath(envName: string, fallback: string) {
+  const configured = process.env[envName]?.trim() || fallback;
+  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+}
+
+function fileMtime(file: string) {
+  try {
+    return statSync(file).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function readJsonArray<T>(file: string): T[] {
+  if (!existsSync(file)) return [];
+  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+// The agent needs fast offline answers. This reader intentionally avoids importing
+// the Playwright automation module, because chat/notification APIs only need the
+// JSON cache already captured by the scanner.
+export function readPortalListCacheLightweight() {
+  const file = cachePath("HEFAMAA_PORTAL_CACHE", "data/portal-facilities-cache.json");
+  const mtimeMs = fileMtime(file);
+  if (listCache?.path === file && listCache.mtimeMs === mtimeMs) return listCache.value;
+
+  const value = readJsonArray<LightweightPortalFacilityRecord>(file);
+  listCache = { path: file, mtimeMs, value };
+  return value;
+}
+
+export function readPortalDetailsCacheLightweight() {
+  const file = cachePath("HEFAMAA_PORTAL_DETAILS_CACHE", "data/portal-facility-details-cache.json");
+  const mtimeMs = fileMtime(file);
+  if (detailsCache?.path === file && detailsCache.mtimeMs === mtimeMs) return detailsCache.value;
+
+  const value = readJsonArray<LightweightPortalFacilityDetailRecord>(file);
+  detailsCache = { path: file, mtimeMs, value };
+  return value;
+}

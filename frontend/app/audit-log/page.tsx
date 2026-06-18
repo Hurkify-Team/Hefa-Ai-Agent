@@ -46,7 +46,7 @@ async function fetchApi<T>(url: string) {
 
 function statusClasses(status: AuditEntry["status"]) {
   if (status === "success") {
-    return "bg-emerald-100 text-emerald-800";
+    return "bg-blue-100 text-blue-800";
   }
 
   if (status === "warning") {
@@ -178,7 +178,7 @@ export default function AuditLogPage() {
     className: string;
   }> = [
     { label: "Total Entries", value: summary.total, icon: ClipboardList, className: "bg-blue-50 text-blue-700" },
-    { label: "Successful", value: summary.success, icon: CheckCircle2, className: "bg-emerald-50 text-emerald-700" },
+    { label: "Successful", value: summary.success, icon: CheckCircle2, className: "bg-blue-50 text-blue-700" },
     { label: "Warnings", value: summary.warning, icon: ShieldAlert, className: "bg-amber-50 text-amber-700" },
     { label: "Failed", value: summary.failed, icon: XCircle, className: "bg-rose-50 text-rose-700" },
   ];
@@ -230,14 +230,14 @@ export default function AuditLogPage() {
             <div className="relative">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
-                className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-[13px] font-semibold outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-[13px] font-semibold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search by facility, category, user, action, detail, or URL"
                 value={query}
               />
             </div>
             <select
-              className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
               value={statusFilter}
             >
@@ -247,7 +247,7 @@ export default function AuditLogPage() {
               <option value="failed">Failed</option>
             </select>
             <select
-              className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+              className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               onChange={(event) => setActionFilter(event.target.value as ActionFilter)}
               value={actionFilter}
             >

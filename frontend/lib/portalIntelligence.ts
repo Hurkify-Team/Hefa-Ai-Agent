@@ -13,6 +13,11 @@ export type PortalRecordFilters = {
   year?: number;
 };
 
+type CategoryLgaSummaryRow = { Category: string; Count: number; LGA: string };
+
+let latestPortalFacilitiesCache: { source: PortalFacilityRecord[]; value: PortalFacilityRecord[] } | null = null;
+let categoryLgaSummaryCache: { source: PortalFacilityRecord[]; value: CategoryLgaSummaryRow[] } | null = null;
+
 const DETAIL_ALIASES = {
   address: ["address", "facility address"],
   doctors: ["doctor", "doctors", "medical doctor", "medical doctors"],
@@ -61,18 +66,89 @@ function recordSearchText(record: PortalFacilityRecord) {
   ].join(" ").toLowerCase();
 }
 
+const FACILITY_ADDRESS_ALIASES = ["address", "facility address", "location", "premises", "site address", "operational address"];
+const FACILITY_BRANCH_ALIASES = ["branch", "annex", "branch name", "annex name", "location name"];
+const FACILITY_BRANCH_PATTERN = /\b(?:annex|branch|satellite|extension|outstation|site\s*\d+)\b/i;
+
+function currentRenewalYear() {
+  const configuredYear = Number(process.env.HEFAMAA_CURRENT_RENEWAL_YEAR);
+  return Number.isInteger(configuredYear) && configuredYear >= 2000 ? configuredYear : new Date().getFullYear();
+}
+
+function facilityAddressKey(record: PortalFacilityRecord) {
+  if (record.visibleFields?.["Detail Captured At"]) return "";
+  const address = visibleFieldValue(record, FACILITY_ADDRESS_ALIASES);
+  return address ? normalizedToken(address) : "";
+}
+
+function facilityBranchKey(record: PortalFacilityRecord) {
+  const explicitBranch = visibleFieldValue(record, FACILITY_BRANCH_ALIASES);
+  if (explicitBranch) return normalizedToken(explicitBranch);
+
+  const markerText = [record.facilityName, record.category, record.text].filter(Boolean).join(" ");
+  const marker = markerText.match(FACILITY_BRANCH_PATTERN)?.[0] ?? "";
+  return marker ? normalizedToken(marker) : "";
+}
+
+function stablePortalIdKey(value: string) {
+  return normalizedToken(value)
+    .replace(/\b20\d{2}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function facilityKey(record: PortalFacilityRecord) {
-  return [normalizedToken(record.facilityName), normalizedToken(record.category)].join("|");
+  const name = normalizedToken(record.facilityName);
+  const category = normalizedToken(record.category);
+  const address = facilityAddressKey(record);
+  const branch = facilityBranchKey(record);
+  const fallbackId = stablePortalIdKey(record.hefamaaId);
+
+  return [name || fallbackId, category, address || branch].join("|");
+}
+
+function recordDateTime(record: PortalFacilityRecord) {
+  const value = record.recordDate;
+  if (!value) return 0;
+
+  const normalized = String(value).trim().replace(/-/g, "/");
+  const parts = normalized.split("/").map((part) => Number(part.trim()));
+  if (parts.length === 3 && parts.every((part) => Number.isFinite(part))) {
+    const [day, month, rawYear] = parts;
+    const year = rawYear < 100 ? rawYear + (rawYear < 50 ? 2000 : 1900) : rawYear;
+    const parsed = new Date(year, month - 1, day);
+    return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+  }
+
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+}
+
+function latestRecordFromGroup(records: PortalFacilityRecord[]) {
+  const year = currentRenewalYear();
+  return [...records].sort((a, b) => {
+    const aCurrent = a.renewalYear === year ? 1 : 0;
+    const bCurrent = b.renewalYear === year ? 1 : 0;
+    return bCurrent - aCurrent || (b.renewalYear ?? 0) - (a.renewalYear ?? 0) || recordDateTime(b) - recordDateTime(a);
+  })[0];
 }
 
 export function latestPortalFacilities(records = getPortalFacilityExportRecords()) {
-  const latest = new Map<string, PortalFacilityRecord>();
+  if (latestPortalFacilitiesCache?.source === records) {
+    return latestPortalFacilitiesCache.value;
+  }
+
+  const grouped = new Map<string, PortalFacilityRecord[]>();
   for (const record of records) {
     const key = facilityKey(record);
-    const existing = latest.get(key);
-    if (!existing || (record.renewalYear ?? 0) > (existing.renewalYear ?? 0)) latest.set(key, record);
+    const group = grouped.get(key) ?? [];
+    group.push(record);
+    grouped.set(key, group);
   }
-  return Array.from(latest.values());
+  const latest = Array.from(grouped.values()).map((group) => latestRecordFromGroup(group)).filter((record): record is PortalFacilityRecord => Boolean(record));
+  latestPortalFacilitiesCache = { source: records, value: latest };
+  categoryLgaSummaryCache = null;
+  return latest;
 }
 
 function facilityType(record: PortalFacilityRecord, records: PortalFacilityRecord[]) {
@@ -112,6 +188,31 @@ export function filterPortalFacilityRecords(filters: PortalRecordFilters = {}) {
     records: limit ? records.slice(0, limit) : records,
     totalMatches: records.length,
   };
+}
+
+function categoryLgaSummaryRows() {
+  const latest = latestPortalFacilities();
+  if (categoryLgaSummaryCache?.source === latest) {
+    return categoryLgaSummaryCache.value;
+  }
+
+  const counts = new Map<string, CategoryLgaSummaryRow>();
+
+  for (const record of latest) {
+    const category = clean(record.category) || "Unknown Category";
+    const rawLga = visibleFieldValue(record, DETAIL_ALIASES.lga);
+    const lga = rawLga ? normalizeLGA(rawLga) : "Unknown LGA";
+    const key = normalizedToken(category) + "|" + normalizedToken(lga);
+    const entry = counts.get(key) ?? { Category: category, LGA: lga, Count: 0 };
+    entry.Count += 1;
+    counts.set(key, entry);
+  }
+
+  const rows = Array.from(counts.values()).sort((a, b) =>
+    a.Category.localeCompare(b.Category) || a.LGA.localeCompare(b.LGA) || b.Count - a.Count,
+  );
+  categoryLgaSummaryCache = { source: latest, value: rows };
+  return rows;
 }
 
 function bestFacilityMatch(query: string) {
@@ -160,8 +261,6 @@ export function seedPortalScanSnapshotFromCurrentCache() {
 export function answerPortalQuestion(question: string) {
   const summary = getPortalFacilitySummary();
   const history = summarizePortalScanHistory();
-  const lower = question.toLowerCase();
-
   if (/daily|today|weekly|monthly|this week|this month|last 7 days|last 30 days/i.test(question)) {
     return {
       question,
@@ -172,6 +271,18 @@ export function answerPortalQuestion(question: string) {
         monthly: history.monthly,
         snapshotCount: history.snapshotCount,
       },
+    };
+  }
+
+  if (/categor/i.test(question) && /\b(lga|local government)\b/i.test(question)) {
+    const rows = categoryLgaSummaryRows();
+    const unknownCount = rows.filter((row) => row.LGA === "Unknown LGA").reduce((total, row) => total + row.Count, 0);
+    return {
+      question,
+      answer: rows.length
+        ? "I grouped the latest portal cache by facility category and LGA. " + rows.length + " category/LGA combinations were found." + (unknownCount ? " " + unknownCount + " facilities still need detail enrichment before LGA can be confirmed." : "")
+        : "No portal cache rows are available for category/LGA grouping. Run Quick Scan or Full Detail Scan first.",
+      rows,
     };
   }
 

@@ -160,7 +160,7 @@ export default function CategoriesPage() {
         ) : null}
 
         {success ? (
-          <p className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-800">
+          <p className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] font-semibold text-blue-800">
             <CheckCircle2 className="h-4 w-4" />
             {success}
           </p>
@@ -170,7 +170,7 @@ export default function CategoriesPage() {
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <FileSpreadsheet className="h-5 w-5 text-emerald-600" />
+                <FileSpreadsheet className="h-5 w-5 text-blue-600" />
                 <h2 className="text-[17px] font-bold text-slate-950">Active Workbook Categories</h2>
               </div>
               <span className="rounded-full bg-slate-100 px-3 py-1 text-[12px] font-bold text-slate-600">
@@ -192,7 +192,7 @@ export default function CategoriesPage() {
                 return (
                   <button
                     className={`grid w-full gap-3 border-t border-slate-200 p-4 text-left xl:grid-cols-[1fr_120px_120px_96px] ${
-                      isSelected ? "bg-emerald-50/70" : "bg-white hover:bg-slate-50"
+                      isSelected ? "bg-blue-50/70" : "bg-white hover:bg-slate-50"
                     }`}
                     key={tab.title}
                     onClick={() => setSelectedCategory(tab.title)}
@@ -203,7 +203,7 @@ export default function CategoriesPage() {
                     <span className="text-[12px] font-semibold text-slate-600">{tab.rowCount} rows</span>
                     <span
                       className={`w-fit rounded-full px-2.5 py-1 text-[11px] font-bold ${
-                        isSelected ? "bg-emerald-600 text-white" : "bg-slate-100 text-slate-600"
+                        isSelected ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600"
                       }`}
                     >
                       {isSelected ? "Active" : "Ready"}
@@ -229,7 +229,7 @@ export default function CategoriesPage() {
                     {selectedCategory || "Select a category"} {selectedTab ? `- ${selectedTab.rowCount} rows` : ""}
                   </p>
                 </div>
-                <span className="rounded-full bg-emerald-50 px-3 py-1 text-[12px] font-bold text-emerald-700">
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-[12px] font-bold text-blue-700">
                   {headers.length} fields
                 </span>
               </div>
@@ -262,7 +262,7 @@ export default function CategoriesPage() {
 
             <form className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm" onSubmit={createCategory}>
               <div className="mb-4 flex items-center gap-2">
-                <FolderPlus className="h-5 w-5 text-emerald-600" />
+                <FolderPlus className="h-5 w-5 text-blue-600" />
                 <h2 className="text-[17px] font-bold text-slate-950">Add New Category Sheet</h2>
               </div>
 
@@ -270,7 +270,7 @@ export default function CategoriesPage() {
                 Category Name
               </label>
               <input
-                className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-semibold text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 onChange={(event) => setCategoryName(event.target.value)}
                 placeholder="RADIOLOGY CENTRE"
                 value={categoryName}
@@ -280,7 +280,7 @@ export default function CategoriesPage() {
                 Headers
               </label>
               <textarea
-                className="mt-2 min-h-[180px] w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-3 font-mono text-[12px] font-semibold leading-5 text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                className="mt-2 min-h-[180px] w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-3 font-mono text-[12px] font-semibold leading-5 text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 onChange={(event) => setHeaderInput(event.target.value)}
                 placeholder={"HEF/NO\nFacility Name\nAddress\nLGA\nLCDA\nContact\nScope of Service"}
                 value={headerInput}
@@ -291,7 +291,7 @@ export default function CategoriesPage() {
                   {parsedHeaders.length} headers ready. One header per line.
                 </p>
                 <button
-                  className="flex h-10 min-w-[150px] items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                  className="flex h-10 min-w-[150px] items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                   disabled={isCreating || !categoryName.trim() || !parsedHeaders.length}
                   type="submit"
                 >

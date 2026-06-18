@@ -139,7 +139,7 @@ function statusMeta(status?: DuplicateCheckResult["status"]) {
     return {
       icon: CheckCircle2,
       label: "No Duplicate Found",
-      className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+      className: "border-blue-200 bg-blue-50 text-blue-800",
       message: "No matching facility was found in the selected category.",
     };
   }
@@ -412,7 +412,7 @@ export default function DuplicateCheckerPage() {
 
   const duplicateSummaryCards = useMemo(
     () => [
-      { label: "Groups", value: workbookDuplicates ? String(workbookDuplicates.groupCount) : "-", className: workbookDuplicates?.groupCount ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700" },
+      { label: "Groups", value: workbookDuplicates ? String(workbookDuplicates.groupCount) : "-", className: workbookDuplicates?.groupCount ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700" },
       { label: "Exact", value: workbookDuplicates ? String(workbookDuplicates.exactGroupCount) : "-", className: "bg-rose-50 text-rose-700" },
       { label: "Possible", value: workbookDuplicates ? String(workbookDuplicates.possibleGroupCount) : "-", className: "bg-blue-50 text-blue-700" },
       { label: "Rows Checked", value: workbookDuplicates ? String(workbookDuplicates.totalRows) : "-", className: "bg-slate-100 text-slate-700" },
@@ -472,7 +472,7 @@ export default function DuplicateCheckerPage() {
                   {selectedTab ? `${selectedTab.rowCount} records in ${selectedTab.title}` : "Select category"}
                 </p>
               </div>
-              <span className="rounded-full bg-emerald-50 px-3 py-1 text-[12px] font-bold text-emerald-700">
+              <span className="rounded-full bg-blue-50 px-3 py-1 text-[12px] font-bold text-blue-700">
                 Category Based
               </span>
             </div>
@@ -480,7 +480,7 @@ export default function DuplicateCheckerPage() {
             <label className="block text-[12px] font-bold text-slate-700">
               Category
               <select
-                className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 disabled={isLoadingTabs}
                 onChange={(event) => {
                   setCategory(event.target.value);
@@ -507,7 +507,7 @@ export default function DuplicateCheckerPage() {
                 <label className="block text-[12px] font-bold text-slate-700" key={field}>
                   {label}
                   <input
-                    className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-semibold outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                    className="mt-2 h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-semibold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                     onChange={(event) => updateField(field as keyof DuplicateForm, event.target.value)}
                     placeholder={`Enter ${label}`}
                     value={form[field as keyof DuplicateForm]}
@@ -517,7 +517,7 @@ export default function DuplicateCheckerPage() {
             </div>
 
             <button
-              className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
               disabled={isChecking || !canCheck}
               type="submit"
             >
@@ -624,15 +624,15 @@ export default function DuplicateCheckerPage() {
                 {isAnalyzingWorkbook ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 Scan Selected
               </button>
-              <button className="flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={isAnalyzingWorkbook} onClick={() => void analyzeWorkbookDuplicates("all")} type="button">
+              <button className="flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={isAnalyzingWorkbook} onClick={() => void analyzeWorkbookDuplicates("all")} type="button">
                 {isAnalyzingWorkbook ? <Loader2 className="h-4 w-4 animate-spin" /> : <SearchCheck className="h-4 w-4" />}
                 Scan All Categories
               </button>
             </div>
           </div>
 
-          {markResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-800"><CheckCircle2 className="h-4 w-4" />Marked {markResult.updatedCells} duplicate-review cells for {markResult.group.label}.</p> : null}
-          {mergeResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-800"><CheckCircle2 className="h-4 w-4" />Applied {mergeResult.updatedCells} supervised duplicate update{mergeResult.updatedCells === 1 ? "" : "s"} to {mergeResult.plan.keeper.facilityName || "the keeper row"}.</p> : null}
+          {markResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] font-semibold text-blue-800"><CheckCircle2 className="h-4 w-4" />Marked {markResult.updatedCells} duplicate-review cells for {markResult.group.label}.</p> : null}
+          {mergeResult ? <p className="mt-4 flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] font-semibold text-blue-800"><CheckCircle2 className="h-4 w-4" />Applied {mergeResult.updatedCells} supervised duplicate update{mergeResult.updatedCells === 1 ? "" : "s"} to {mergeResult.plan.keeper.facilityName || "the keeper row"}.</p> : null}
 
           <div className="mt-5 grid gap-4 xl:grid-cols-4">
             {duplicateSummaryCards.map((card) => (
@@ -686,7 +686,7 @@ export default function DuplicateCheckerPage() {
                               </div>
                               <div className="flex shrink-0 flex-col items-end gap-2">
                                 <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">{record.hefNo || "No HEF/NO"}</span>
-                                <button className="h-8 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 text-[11px] font-extrabold text-emerald-700 disabled:cursor-not-allowed disabled:text-slate-400" disabled={buildingMergeKey === mergeKey} onClick={() => void buildMergePlan(group, record)} type="button">
+                                <button className="h-8 rounded-lg border border-blue-200 bg-blue-50 px-2.5 text-[11px] font-extrabold text-blue-700 disabled:cursor-not-allowed disabled:text-slate-400" disabled={buildingMergeKey === mergeKey} onClick={() => void buildMergePlan(group, record)} type="button">
                                   {buildingMergeKey === mergeKey ? "Building..." : "Use as Keeper"}
                                 </button>
                               </div>
@@ -715,12 +715,12 @@ export default function DuplicateCheckerPage() {
             })}
 
             {!workbookDuplicates ? <p className="border-t border-slate-200 p-5 text-[13px] font-semibold text-slate-500">Run a workbook duplicate scan to review duplicate groups.</p> : null}
-            {workbookDuplicates && !workbookDuplicates.groups.length ? <p className="border-t border-slate-200 p-5 text-[13px] font-semibold text-emerald-700">No duplicate groups found in this scope.</p> : null}
+            {workbookDuplicates && !workbookDuplicates.groups.length ? <p className="border-t border-slate-200 p-5 text-[13px] font-semibold text-blue-700">No duplicate groups found in this scope.</p> : null}
             {workbookDuplicates && workbookDuplicates.groupCount > workbookDuplicates.groups.length ? <p className="border-t border-slate-200 p-3 text-[12px] font-semibold text-slate-500">Showing first {workbookDuplicates.groups.length} of {workbookDuplicates.groupCount} duplicate groups.</p> : null}
           </div>
 
           {mergePlan ? (
-            <article className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50/40 p-5">
+            <article className="mt-5 rounded-xl border border-blue-200 bg-blue-50/40 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 className="text-[17px] font-extrabold text-slate-950">Supervised Duplicate Merge Plan</h3>
@@ -728,7 +728,7 @@ export default function DuplicateCheckerPage() {
                     Keeper: {mergePlan.keeper.facilityName || "Unnamed Facility"} - {mergePlan.keeper.category}, row {mergePlan.keeper.sheetRowNumber}
                   </p>
                 </div>
-                <button className="flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={isApplyingMerge || !selectedMergeFields.size} onClick={() => void applyMergePlan()} type="button">
+                <button className="flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300" disabled={isApplyingMerge || !selectedMergeFields.size} onClick={() => void applyMergePlan()} type="button">
                   {isApplyingMerge ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                   Apply Selected Updates
                 </button>
@@ -745,7 +745,7 @@ export default function DuplicateCheckerPage() {
                   </div>
                   {mergePlan.suggestions.map((suggestion) => (
                     <label className="grid grid-cols-[44px_180px_1fr_1fr_170px] items-start gap-0 border-t border-slate-100 px-4 py-3 text-[12px]" key={suggestion.field}>
-                      <span><input checked={selectedMergeFields.has(suggestion.field)} className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500" onChange={() => toggleMergeField(suggestion.field)} type="checkbox" /></span>
+                      <span><input checked={selectedMergeFields.has(suggestion.field)} className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" onChange={() => toggleMergeField(suggestion.field)} type="checkbox" /></span>
                       <span className="font-extrabold text-slate-950">{suggestion.field}</span>
                       <span className="break-words font-semibold text-slate-500">{suggestion.keeperValue || "Blank"}</span>
                       <span className="break-words font-semibold text-slate-900">{suggestion.suggestedValue}</span>
@@ -767,7 +767,7 @@ export default function DuplicateCheckerPage() {
                         <p className="mt-1 text-[11px] font-bold text-amber-700">{conflict.sourceCategory}, row {conflict.sourceSheetRowNumber}</p>
                       </div>
                     ))}
-                    {!mergePlan.conflicts.length ? <p className="rounded-lg border border-emerald-100 bg-emerald-50 p-3 text-[12px] font-semibold text-emerald-700">No conflicting filled fields found.</p> : null}
+                    {!mergePlan.conflicts.length ? <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-[12px] font-semibold text-blue-700">No conflicting filled fields found.</p> : null}
                   </div>
                 </div>
               </div>

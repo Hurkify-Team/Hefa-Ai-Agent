@@ -25,7 +25,7 @@ export function StepProgress() {
       <div className="grid gap-5 xl:grid-cols-4">
         {steps.map((step, index) => (
           <div className="relative flex items-start gap-4" key={step.title}>
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[13px] font-bold text-white shadow-[0_10px_18px_rgba(16,185,129,0.22)]">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[13px] font-bold text-white shadow-[0_10px_18px_rgba(37,99,235,0.22)]">
               {index + 1}
             </span>
             <div className="min-w-0 pr-3">

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type { PortalFacilityRecord } from "@/lib/playwrightPortal";
@@ -68,7 +68,9 @@ export function readPortalScanSnapshots(): PortalScanSnapshot[] {
 function writePortalScanSnapshots(snapshots: PortalScanSnapshot[]) {
   const file = snapshotsPath();
   mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(snapshots.slice(-MAX_SNAPSHOTS), null, 2), "utf8");
+  const tempFile = file + ".tmp";
+  writeFileSync(tempFile, JSON.stringify(snapshots.slice(-MAX_SNAPSHOTS), null, 2), "utf8");
+  renameSync(tempFile, file);
 }
 
 export function writePortalScanSnapshot(input: PortalScanSnapshotInput) {

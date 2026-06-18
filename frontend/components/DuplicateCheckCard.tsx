@@ -11,7 +11,7 @@ export function DuplicateCheckCard({ duplicateResult = null, isChecking = false 
   const status = duplicateResult?.status ?? "no_duplicate";
   const matchCount = duplicateResult?.matches.length ?? 0;
   const hasDuplicate = status !== "no_duplicate";
-  const badgeClass = hasDuplicate ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800";
+  const badgeClass = hasDuplicate ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800";
   const Icon = hasDuplicate ? AlertTriangle : CheckCircle2;
   const ShieldIcon = hasDuplicate ? ShieldAlert : ShieldCheck;
   const badgeText = isChecking
@@ -51,7 +51,7 @@ export function DuplicateCheckCard({ duplicateResult = null, isChecking = false 
       <div className="flex items-center gap-5 py-3">
         <span
           className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-xl ${
-            hasDuplicate ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700"
+            hasDuplicate ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700"
           }`}
         >
           <ShieldIcon className="h-10 w-10 stroke-[1.6]" />

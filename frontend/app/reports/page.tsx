@@ -79,7 +79,7 @@ export default function ReportsPage() {
         title: "Total Categories",
         value: summary ? formatNumber(summary.totalCategories) : "-",
         icon: BarChart3,
-        className: "bg-emerald-50 text-emerald-700",
+        className: "bg-blue-50 text-blue-700",
       },
       {
         title: "Incomplete Records",
@@ -143,7 +143,7 @@ export default function ReportsPage() {
         <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              <Rows3 className="h-5 w-5 text-emerald-600" />
+              <Rows3 className="h-5 w-5 text-blue-600" />
               <h2 className="text-[17px] font-bold text-slate-950">Category Summary</h2>
             </div>
             <div className="overflow-hidden rounded-lg border border-slate-200">

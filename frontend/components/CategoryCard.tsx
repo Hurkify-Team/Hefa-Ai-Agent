@@ -34,7 +34,7 @@ export function CategoryCard({
       <div className="relative">
         <select
           aria-label="Select active facility category"
-          className="h-12 w-full appearance-none rounded-lg border border-slate-200 bg-white px-4 pr-10 text-left text-[15px] font-bold text-slate-900 shadow-sm outline-none transition focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+          className="h-12 w-full appearance-none rounded-lg border border-slate-200 bg-white px-4 pr-10 text-left text-[15px] font-bold text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
           disabled={isLoading || tabs.length === 0}
           onChange={(event) => onCategoryChange?.(event.target.value)}
           value={activeCategory}
@@ -61,7 +61,7 @@ export function CategoryCard({
       ) : null}
 
       <div className="my-4 flex justify-center border-b border-slate-200 pb-4">
-        <span className="rounded-md bg-emerald-100 px-4 py-2 text-[12px] font-bold text-emerald-800">
+        <span className="rounded-md bg-blue-100 px-4 py-2 text-[12px] font-bold text-blue-800">
           {headerCount} Columns Detected
         </span>
       </div>

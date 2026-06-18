@@ -155,7 +155,7 @@ export default function DashboardPage() {
         label: "Total Categories",
         value: summary ? formatNumber(summary.totalCategories) : "-",
         icon: FolderKanban,
-        className: "bg-emerald-50 text-emerald-700",
+        className: "bg-blue-50 text-blue-700",
       },
       {
         label: "Incomplete Records",
@@ -222,13 +222,13 @@ export default function DashboardPage() {
         <div className="grid gap-5 2xl:grid-cols-[1.15fr_0.85fr]">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              <MessageSquareText className="h-5 w-5 text-emerald-600" />
+              <MessageSquareText className="h-5 w-5 text-blue-600" />
               <h2 className="text-[17px] font-bold text-slate-950">Ask Database Questions</h2>
             </div>
 
             <form className="grid gap-3 xl:grid-cols-[220px_1fr_auto]" onSubmit={askQuestion}>
               <select
-                className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                className="h-11 rounded-lg border border-slate-200 bg-white px-3 text-[13px] font-bold text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                 onChange={(event) => setQuestionCategory(event.target.value)}
                 value={questionCategory}
               >
@@ -243,7 +243,7 @@ export default function DashboardPage() {
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
-                  className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-[13px] font-semibold outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                  className="h-11 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-3 text-[13px] font-semibold outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                   onChange={(event) => setQuestion(event.target.value)}
                   placeholder="How many facilities are in Ikeja?"
                   value={question}
@@ -251,7 +251,7 @@ export default function DashboardPage() {
               </div>
 
               <button
-                className="flex h-11 min-w-[120px] items-center justify-center gap-2 rounded-lg bg-emerald-600 px-5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                className="flex h-11 min-w-[120px] items-center justify-center gap-2 rounded-lg bg-blue-600 px-5 text-[13px] font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
                 disabled={isAsking || !question.trim()}
                 type="submit"
               >
@@ -268,14 +268,14 @@ export default function DashboardPage() {
             ) : null}
 
             {questionResult ? (
-              <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/70 p-4">
-                <p className="text-[12px] font-extrabold uppercase tracking-[0.03em] text-emerald-700">
+              <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/70 p-4">
+                <p className="text-[12px] font-extrabold uppercase tracking-[0.03em] text-blue-700">
                   Answer
                 </p>
                 <p className="mt-2 text-[15px] font-bold leading-6 text-slate-950">{questionResult.answer}</p>
 
                 {matchedRows.length ? (
-                  <div className="mt-4 overflow-hidden rounded-lg border border-emerald-100 bg-white">
+                  <div className="mt-4 overflow-hidden rounded-lg border border-blue-100 bg-white">
                     {matchedRows.map((row, index) => (
                       <div
                         className="grid gap-2 border-b border-slate-100 px-3 py-3 last:border-b-0 md:grid-cols-[34px_1fr_1fr]"
@@ -320,7 +320,7 @@ export default function DashboardPage() {
         <div className="grid gap-5 xl:grid-cols-[1fr_1fr] 2xl:grid-cols-[1fr_0.85fr_0.85fr]">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              <BarChart3 className="h-5 w-5 text-emerald-600" />
+              <BarChart3 className="h-5 w-5 text-blue-600" />
               <h2 className="text-[17px] font-bold text-slate-950">Top Categories</h2>
             </div>
             <div className="space-y-3">

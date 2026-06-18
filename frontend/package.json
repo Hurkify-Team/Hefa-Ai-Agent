@@ -3,15 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start"
   },
   "dependencies": {
+    "@types/nodemailer": "^8.0.1",
     "exceljs": "^4.4.0",
     "googleapis": "^172.0.0",
     "lucide-react": "latest",
     "next": "latest",
+    "nodemailer": "^8.0.11",
     "playwright": "^1.60.0",
     "react": "latest",
     "react-dom": "latest",

@@ -48,7 +48,7 @@ export function AnalyticsCard() {
 
   const rows = [
     { label: "Total Facilities", value: formatNumber(summary?.totalFacilities ?? null), icon: Building2, className: "bg-blue-50 text-blue-700" },
-    { label: "Active Facilities", value: summary ? formatNumber(summary.totalFacilities - summary.incompleteRecords) : "-", icon: Activity, className: "bg-emerald-50 text-emerald-700" },
+    { label: "Active Facilities", value: summary ? formatNumber(summary.totalFacilities - summary.incompleteRecords) : "-", icon: Activity, className: "bg-blue-50 text-blue-700" },
     { label: "Incomplete Records", value: formatNumber(summary?.incompleteRecords ?? null), icon: Bot, className: "bg-amber-50 text-amber-700" },
     { label: "Total Categories", value: formatNumber(summary?.totalCategories ?? null), icon: Database, className: "bg-violet-50 text-violet-700" },
   ];
@@ -57,7 +57,7 @@ export function AnalyticsCard() {
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-4">
         <h2 className="flex items-center gap-2 text-[16px] font-bold text-slate-950">
-          <Sparkles className="h-4 w-4 text-emerald-600" />
+          <Sparkles className="h-4 w-4 text-blue-600" />
           Quick Analytics
         </h2>
         <p className="mt-1 text-[12px] text-slate-500">{error ?? "Live Google Sheet summary"}</p>

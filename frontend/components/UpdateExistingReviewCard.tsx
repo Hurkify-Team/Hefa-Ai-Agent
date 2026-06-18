@@ -52,7 +52,7 @@ function fieldStatus(existingValue: SheetRow[string] | undefined, extractedValue
   }
 
   if (sameValue(existingValue, extractedValue)) {
-    return { label: "Same", className: "bg-emerald-100 text-emerald-700", canSelect: false };
+    return { label: "Same", className: "bg-blue-100 text-blue-700", canSelect: false };
   }
 
   if (isBlank(existingValue)) {
@@ -93,7 +93,7 @@ export function UpdateExistingReviewCard({
           </p>
         </div>
         <button
-          className="flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300"
           disabled={isUpdating || selectedCount === 0}
           onClick={onUpdate}
           type="button"
@@ -115,7 +115,7 @@ export function UpdateExistingReviewCard({
                   <button
                     className={
                       "w-full rounded-lg border px-3 py-2 text-left transition " +
-                      (selected ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-white hover:bg-slate-50")
+                      (selected ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white hover:bg-slate-50")
                     }
                     key={match.rowIndex}
                     onClick={() => onSelectMatch(match.rowIndex)}
@@ -201,7 +201,7 @@ export function UpdateExistingReviewCard({
                           onClick={() => onSelectField(header)}
                           type="button"
                         >
-                          {checked ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <Circle className="h-4 w-4" />}
+                          {checked ? <CheckCircle2 className="h-4 w-4 text-blue-600" /> : <Circle className="h-4 w-4" />}
                         </button>
                       </td>
                       <td className="px-3 py-2 align-top text-[12px] font-extrabold text-slate-950">{header}</td>

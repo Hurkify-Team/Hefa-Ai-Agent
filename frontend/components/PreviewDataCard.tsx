@@ -5,7 +5,7 @@ import { AlertTriangle, CheckCircle2, Database, MinusCircle, Pencil, Save, Refre
 import type { SheetRow, SheetRowValue } from "@/types/sheet";
 
 const statusIcons = {
-  success: <CheckCircle2 className="h-4 w-4 fill-emerald-600 text-white" />,
+  success: <CheckCircle2 className="h-4 w-4 fill-blue-600 text-white" />,
   neutral: <MinusCircle className="h-4 w-4 fill-slate-300 text-white" />,
   warning: <AlertTriangle className="h-4 w-4 fill-amber-500 text-white" />,
 };
@@ -136,7 +136,7 @@ export function PreviewDataCard({
         <h2 className="text-[17px] font-bold tracking-[-0.01em] text-slate-950">
           3. Preview Extracted Data
         </h2>
-        <span className="flex shrink-0 items-center gap-1.5 rounded-md bg-emerald-100 px-3 py-1.5 text-[12px] font-bold text-emerald-800">
+        <span className="flex shrink-0 items-center gap-1.5 rounded-md bg-blue-100 px-3 py-1.5 text-[12px] font-bold text-blue-800">
           <CheckCircle2 className="h-3.5 w-3.5" />
           {confidencePercent == null ? "Awaiting Capture" : "AI Confidence: " + confidencePercent + "%"}
         </span>
@@ -167,13 +167,13 @@ export function PreviewDataCard({
                   {isEditing && matchedFields && onValueChange ? (
                     isLongField(row.header, fieldValue(row.header)) ? (
                       <textarea
-                        className="min-h-[64px] w-full resize-y rounded-md border border-slate-200 bg-white px-2 py-2 text-[12px] font-semibold leading-4 text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                        className="min-h-[64px] w-full resize-y rounded-md border border-slate-200 bg-white px-2 py-2 text-[12px] font-semibold leading-4 text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                         onChange={(event) => onValueChange(row.header, event.target.value)}
                         value={fieldValue(row.header)}
                       />
                     ) : (
                       <input
-                        className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] font-semibold text-slate-900 outline-none focus:border-emerald-500 focus:ring-2 focus:ring-emerald-100"
+                        className="h-9 w-full rounded-md border border-slate-200 bg-white px-2 text-[12px] font-semibold text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                         onChange={(event) => onValueChange(row.header, event.target.value)}
                         value={fieldValue(row.header)}
                       />
@@ -288,15 +288,15 @@ export function PreviewDataCard({
       ) : null}
 
       {preparedSavePreview ? (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+        <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h3 className="text-[12px] font-extrabold text-slate-950">Prepared Google Sheet Row</h3>
-              <p className="mt-1 text-[11px] font-semibold text-emerald-800">
+              <p className="mt-1 text-[11px] font-semibold text-blue-800">
                 Review this prepared {preparedSavePreview.category} row before confirming the live write.
               </p>
             </div>
-            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-extrabold text-emerald-700 ring-1 ring-emerald-200">
+            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-extrabold text-blue-700 ring-1 ring-blue-200">
               {preparedSavePreview.autoSerial
                 ? preparedSavePreview.autoSerial.header + ": " + preparedSavePreview.autoSerial.value
                 : "No S/N column"}
@@ -305,7 +305,7 @@ export function PreviewDataCard({
           {preparedEntries.length ? (
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               {preparedEntries.slice(0, 8).map(([field, value]) => (
-                <div className="rounded-md bg-white px-3 py-2 ring-1 ring-emerald-100" key={field}>
+                <div className="rounded-md bg-white px-3 py-2 ring-1 ring-blue-100" key={field}>
                   <p className="truncate text-[10px] font-extrabold uppercase tracking-[0.03em] text-slate-500">{field}</p>
                   <p className="mt-1 break-words text-[12px] font-semibold text-slate-900">{formatValue(value)}</p>
                 </div>
@@ -313,7 +313,7 @@ export function PreviewDataCard({
             </div>
           ) : null}
           {preparedEntries.length > 8 ? (
-            <p className="mt-2 text-[11px] font-semibold text-emerald-800">
+            <p className="mt-2 text-[11px] font-semibold text-blue-800">
               Showing first 8 filled fields of {preparedEntries.length}. The full row will follow the selected sheet headers.
             </p>
           ) : null}
@@ -359,7 +359,7 @@ export function PreviewDataCard({
           Cancel
         </button>
         <button
-          className="flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 text-[12px] font-bold text-white shadow-[0_12px_25px_rgba(16,185,129,0.26)] transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+          className="flex h-10 items-center justify-center gap-2 rounded-lg bg-blue-600 text-[12px] font-bold text-white shadow-[0_12px_25px_rgba(37,99,235,0.26)] transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
           disabled={saveDisabled || isSaving || isUpdating || !matchedFields}
           onClick={onSave}
           type="button"
@@ -371,7 +371,7 @@ export function PreviewDataCard({
 
       {onUpdate ? (
         <button
-          className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 text-[12px] font-bold text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+          className="mt-3 flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 text-[12px] font-bold text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
           disabled={updateDisabled || isSaving || isUpdating || !matchedFields}
           onClick={onUpdate}
           type="button"

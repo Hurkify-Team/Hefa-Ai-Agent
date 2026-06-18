@@ -104,7 +104,7 @@ export default function BulkOperationsPage() {
         label: "Categories",
         value: summary ? formatNumber(summary.totalCategories) : "-",
         icon: BarChart3,
-        className: "bg-emerald-50 text-emerald-700",
+        className: "bg-blue-50 text-blue-700",
       },
       {
         label: "Incomplete Records",
@@ -145,7 +145,7 @@ export default function BulkOperationsPage() {
               Refresh Summary
             </button>
             <button
-              className="flex h-10 items-center gap-2 rounded-lg bg-emerald-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="flex h-10 items-center gap-2 rounded-lg bg-blue-600 px-4 text-[13px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:bg-slate-300"
               disabled={isRefreshingCache}
               onClick={() => void refreshWorkbookCache()}
               type="button"
@@ -164,7 +164,7 @@ export default function BulkOperationsPage() {
         ) : null}
 
         {cacheMessage ? (
-          <p className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-[13px] font-semibold text-emerald-800">
+          <p className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-[13px] font-semibold text-blue-800">
             <CheckCircle2 className="h-4 w-4" />
             {cacheMessage}
           </p>
@@ -185,7 +185,7 @@ export default function BulkOperationsPage() {
         <div className="grid gap-5 2xl:grid-cols-[1.15fr_0.85fr]">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2">
-              <Database className="h-5 w-5 text-emerald-600" />
+              <Database className="h-5 w-5 text-blue-600" />
               <h2 className="text-[17px] font-bold text-slate-950">Category Coverage</h2>
             </div>
             <div className="overflow-hidden rounded-lg border border-slate-200">
