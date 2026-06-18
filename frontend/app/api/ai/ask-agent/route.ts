@@ -84,7 +84,7 @@ function compactRows(rows: unknown, limit = 8) {
 }
 
 function isStaffQuestion(question: string) {
-  return /staff\s+name|professional\s+staff|where\s+is\s+.+\s+working|working\s+presently|doctor|nurse|pharmacist|radiographer|lab\s+(?:scientist|tech)|mdcn|mlscn|nmcn|pcn|manipulat|same\s+registration/i.test(question);
+  return /staff\s+name|professional\s+staff|medical\s+professional\s+data|where\s+is\s+.+\s+(?:working|work|presently|currently)|where\s+does\s+.+\s+work|working\s+presently|how\s+many\s+facilit(?:y|ies).*?(?:appear|appearing|working|work|listed)|facilit(?:y|ies).*?(?:staff|name|professional).*?(?:appear|appearing|working|work)|mdcn|mlscn|nmcn|pcn|manipulat|same\s+registration/i.test(question);
 }
 
 function isHefNoQuestion(question: string) {
@@ -321,6 +321,28 @@ export async function POST(request: Request) {
   try {
     const payload = askAgentSchema.parse(await request.json());
     const requestedSources = payload.sources?.length ? payload.sources : ["portal", "sheets"] as AgentSource[];
+
+    if (requestedSources.includes("portal") && isStaffQuestion(payload.question)) {
+      const staff = await import("@/lib/staffIntelligence");
+      if (staff.isStaffQuestion(payload.question)) {
+        const result = staff.answerStaffQuestion(payload.question);
+        return ok({
+          question: payload.question,
+          answer: "I checked HEFAMAA Portal Professional Staff Index.\n\n" + result.answer,
+          sources: [{
+            source: "portal",
+            label: "HEFAMAA Portal Professional Staff Index",
+            status: "ok",
+            answer: result.answer,
+            rows: compactRows(result.rows, 25),
+            summary: result.summary,
+          }],
+          rows: compactRows(result.rows, 25),
+          summary: result.summary,
+          actions: [],
+        });
+      }
+    }
 
     if (requestedSources.includes("portal") && isGlobalFacilityTotalQuestion(payload.question)) {
       const result = answerGlobalFacilityTotalQuestion(payload.question);

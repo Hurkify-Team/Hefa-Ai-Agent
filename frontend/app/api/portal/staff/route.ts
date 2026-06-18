@@ -1,5 +1,5 @@
 import { fail, ok } from "@/lib/apiResponse";
-import { buildStaffIndex, findStaffIntegrityIssues, searchStaffIntelligence } from "@/lib/staffIntelligence";
+import { buildStaffIndex, findStaffIntegrityIssues, latestDistinctFacilityRecords, publicStaffRow, searchStaffIntelligence } from "@/lib/staffIntelligence";
 
 export const runtime = "nodejs";
 
@@ -11,18 +11,15 @@ function issueCounts(issues: ReturnType<typeof findStaffIntegrityIssues>) {
 }
 
 function row(record: ReturnType<typeof buildStaffIndex>[number]) {
-  return {
-    staffName: record.staffName,
-    profession: record.profession,
-    registrationNumber: record.registrationNumber,
-    facilityName: record.facilityName,
-    category: record.category,
-    hefamaaId: record.hefamaaId,
-    renewalYear: record.renewalYear,
-    registrationStatus: record.registrationStatus,
-    capturedAt: record.capturedAt,
-    sourceUrl: record.sourceUrl,
-  };
+  return publicStaffRow(record);
+}
+
+function professionCounts(records: ReturnType<typeof buildStaffIndex>) {
+  return records.reduce<Record<string, number>>((acc, record) => {
+    const profession = record.profession || "Unknown Profession";
+    acc[profession] = (acc[profession] ?? 0) + 1;
+    return acc;
+  }, {});
 }
 
 export async function GET(request: Request) {
@@ -34,13 +31,17 @@ export async function GET(request: Request) {
 
     const index = buildStaffIndex();
     const matches = query ? searchStaffIntelligence(query, index) : index;
+    const distinctFacilities = latestDistinctFacilityRecords(matches);
     const issues = includeIssues ? findStaffIntegrityIssues(index) : [];
 
     return ok({
       totalStaffRecords: index.length,
       query: query || null,
       matchCount: matches.length,
-      records: matches.slice(0, limit).map(row),
+      distinctFacilityCount: distinctFacilities.length,
+      professionCounts: professionCounts(matches),
+      records: distinctFacilities.slice(0, limit).map(row),
+      portalYearRecords: matches.slice(0, limit).map(row),
       issueCount: issues.length,
       issueCounts: issueCounts(issues),
       issues: issues.slice(0, 25).map((issue) => ({

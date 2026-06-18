@@ -1,4 +1,9 @@
-import { readPortalFacilityDetailsCache, type PortalFacilityDetailRecord } from "@/lib/playwrightPortal";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
+import path from "path";
+
+import { readPortalDetailsCacheLightweight, type LightweightPortalFacilityDetailRecord } from "@/lib/portalCacheStore";
+
+type PortalFacilityDetailRecord = LightweightPortalFacilityDetailRecord;
 
 export type StaffIndexRecord = {
   staffName: string;
@@ -35,6 +40,57 @@ export type StaffQuestionAnswer = {
   summary: Record<string, unknown>;
   rows: Array<Record<string, unknown>>;
 };
+
+type StaffIndexDiskCache = {
+  records?: StaffIndexRecord[];
+  sourceMtimeMs?: number;
+  version?: number;
+};
+
+let staffIndexMemoryCache: { records: StaffIndexRecord[]; sourceMtimeMs: number } | null = null;
+
+function dataPath(envName: string, fallback: string) {
+  const configured = process.env[envName]?.trim() || fallback;
+  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+}
+
+function detailsCachePath() {
+  return dataPath("HEFAMAA_PORTAL_DETAILS_CACHE", "data/portal-facility-details-cache.json");
+}
+
+function staffIndexCachePath() {
+  return dataPath("HEFAMAA_PORTAL_STAFF_INDEX", "data/portal-staff-index.json");
+}
+
+function fileMtimeMs(filePath: string) {
+  try {
+    return statSync(filePath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+function readStaffIndexDiskCache(sourceMtimeMs: number) {
+  const filePath = staffIndexCachePath();
+  if (!existsSync(filePath)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, "utf8")) as StaffIndexDiskCache;
+    if (parsed.version !== 1 || parsed.sourceMtimeMs !== sourceMtimeMs || !Array.isArray(parsed.records)) return null;
+    return parsed.records;
+  } catch {
+    return null;
+  }
+}
+
+function writeStaffIndexDiskCache(sourceMtimeMs: number, records: StaffIndexRecord[]) {
+  const filePath = staffIndexCachePath();
+  try {
+    mkdirSync(path.dirname(filePath), { recursive: true });
+    writeFileSync(filePath, JSON.stringify({ records, sourceMtimeMs, version: 1 }), "utf8");
+  } catch {
+    // Chat answers still work from memory if the local cache snapshot cannot be written.
+  }
+}
 
 const PROFESSION_PATTERNS: Array<[RegExp, string]> = [
   [/\bmedical\s+doctor\b|\bdoctor\b|\bphysician\b|\bconsultant\b|\bmd\b/i, "Doctor"],
@@ -343,7 +399,16 @@ function dedupe(records: StaffIndexRecord[]): StaffIndexRecord[] {
 }
 
 export function buildStaffIndex(): StaffIndexRecord[] {
-  const details = readPortalFacilityDetailsCache();
+  const sourceMtimeMs = fileMtimeMs(detailsCachePath());
+  if (staffIndexMemoryCache?.sourceMtimeMs === sourceMtimeMs) return staffIndexMemoryCache.records;
+
+  const diskRecords = readStaffIndexDiskCache(sourceMtimeMs);
+  if (diskRecords) {
+    staffIndexMemoryCache = { records: diskRecords, sourceMtimeMs };
+    return diskRecords;
+  }
+
+  const details = readPortalDetailsCacheLightweight();
   const records: StaffIndexRecord[] = [];
 
   for (const detail of details) {
@@ -353,7 +418,10 @@ export function buildStaffIndex(): StaffIndexRecord[] {
     records.push(...parseProfessionalStaffBodyText(detail));
   }
 
-  return dedupe(records);
+  const unique = dedupe(records);
+  staffIndexMemoryCache = { records: unique, sourceMtimeMs };
+  writeStaffIndexDiskCache(sourceMtimeMs, unique);
+  return unique;
 }
 
 function groupBy(records: StaffIndexRecord[], keyFn: (record: StaffIndexRecord) => string): Map<string, StaffIndexRecord[]> {
@@ -418,7 +486,7 @@ export function findStaffIntegrityIssues(records = buildStaffIndex()): StaffInte
   return issues;
 }
 
-function publicRow(record: StaffIndexRecord): Record<string, unknown> {
+export function publicStaffRow(record: StaffIndexRecord): Record<string, unknown> {
   return {
     staffName: record.staffName,
     profession: record.profession,
@@ -459,22 +527,84 @@ export function searchStaffIntelligence(query: string, records = buildStaffIndex
     .map((entry) => entry.record);
 }
 
+function renewalYearNumber(record: StaffIndexRecord) {
+  const year = Number(String(record.renewalYear || "").match(/20\d{2}/)?.[0] ?? 0);
+  return Number.isFinite(year) ? year : 0;
+}
+
+function capturedTime(record: StaffIndexRecord) {
+  const time = Date.parse(record.capturedAt || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
+function recencyScore(record: StaffIndexRecord) {
+  return renewalYearNumber(record) * 10_000_000_000_000 + capturedTime(record);
+}
+
+function distinctFacilityKey(record: StaffIndexRecord) {
+  const facility = normalizeName(record.facilityName);
+  const category = normalizeName(record.category);
+  return facility ? facility + "|" + category : normalizeRegistrationNumber(record.hefamaaId);
+}
+
+export function latestDistinctFacilityRecords(records: StaffIndexRecord[]) {
+  const bestByFacility = new Map<string, StaffIndexRecord>();
+  for (const record of records) {
+    const key = distinctFacilityKey(record);
+    if (!key) continue;
+    const existing = bestByFacility.get(key);
+    if (!existing || recencyScore(record) > recencyScore(existing)) {
+      bestByFacility.set(key, record);
+    }
+  }
+  return Array.from(bestByFacility.values()).sort((a, b) => cleanText(a.facilityName).localeCompare(cleanText(b.facilityName)));
+}
+
+function uniqueRegistrationNumbers(records: StaffIndexRecord[]) {
+  return Array.from(new Set(records.map((record) => record.registrationNumber).map(cleanText).filter(Boolean)));
+}
+
+function uniqueProfessions(records: StaffIndexRecord[]) {
+  return Array.from(new Set(records.map((record) => record.profession).map(cleanText).filter(Boolean)));
+}
+
+function listFacilities(records: StaffIndexRecord[], max = 8) {
+  const names = records.slice(0, max).map((record) => {
+    const suffix = [record.category, record.renewalYear ? "latest portal year " + record.renewalYear : ""].filter(Boolean).join(", " );
+    return record.facilityName + (suffix ? " (" + suffix + ")" : "");
+  });
+  if (!names.length) return "";
+  const extra = records.length > max ? " and " + (records.length - max).toLocaleString() + " more" : "";
+  return names.join("; " ) + extra;
+}
+
+function asksForFacilityAppearance(question: string) {
+  return /how\s+many\s+facilit(?:y|ies)|facilit(?:y|ies).*?(?:appear|appearing|working|work|listed)|where\s+(?:is|does)|working\s+presently|work\s+presently/i.test(question);
+}
+
 function extractStaffLookupQuery(question: string): string {
   const text = cleanText(question);
   const quoted = text.match(/["'“‘]([^"'”’]{2,})["'”’]/);
   if (quoted?.[1]) return quoted[1];
 
   const patterns = [
-    /where\s+is\s+(.+?)\s+working/i,
+    /how\s+many\s+facilit(?:y|ies).*?(?:is|does|has)?\s*(.+?)\s+(?:appear|appearing|work|working|listed|showing)/i,
+    /(?:which|what)\s+facilit(?:y|ies).*?(?:does|is)\s+(.+?)\s+(?:work|appear|appearing)/i,
+    /where\s+is\s+(.+?)\s+(?:working|currently|presently|now)/i,
     /where\s+does\s+(.+?)\s+work/i,
-    /(?:staff\s+name|name)\s+(?:is\s+)?(.+?)(?:\?|$)/i,
+    /(?:staff\s+name|professional\s+name|name)\s+(?:is\s+)?(.+?)(?:\?|$)/i,
     /(?:registration\s+number|reg\.?\s*no|license|licence|folio)\s+(?:for|of)?\s*(.+?)(?:\?|$)/i,
-    /(?:find|search|check)\s+(?:staff|doctor|nurse|personnel)?\s*(.+?)(?:\?|$)/i,
+    /(?:find|search|check)\s+(?:staff|doctor|nurse|personnel|professional)?\s*(.+?)(?:\?|$)/i,
   ];
 
   for (const pattern of patterns) {
     const match = text.match(pattern);
-    if (match?.[1]) return cleanText(match[1].replace(/\b(presently|currently|now|exist|exists|working|facility|facilities)\b/gi, ""));
+    if (match?.[1]) {
+      return cleanText(match[1]
+        .replace(/^(?:is|does|has)\s+/i, "")
+        .replace(/\b(presently|currently|now|exist|exists|working|work|appearing|appear|listed|showing|facility|facilities|this\s+name|the\s+name)\b/gi, "")
+        .replace(/[?.!]+$/g, ""));
+    }
   }
 
   const registration = extractRegistrationNumber(text);
@@ -484,11 +614,12 @@ function extractStaffLookupQuery(question: string): string {
 }
 
 export function isStaffQuestion(question: string): boolean {
-  const explicitStaffContext = /staff\s+name|professional\s+staff|staff\s+exist|where\s+is\s+.+\s+working|where\s+does\s+.+\s+work|working\s+presently|doctor|nurse|pharmacist|radiographer|lab\s+(?:scientist|tech)|mdcn|mlscn|nmcn|pcn|manipulat|same\s+registration/i.test(question);
+  const explicitStaffContext = /staff\s+name|professional\s+staff|medical\s+professional\s+data|staff\s+exist|where\s+is\s+.+\s+(?:working|work|presently|currently)|where\s+does\s+.+\s+work|working\s+presently|how\s+many\s+facilit(?:y|ies).*?(?:appear|appearing|working|work|listed)|manipulat|same\s+registration/i.test(question);
+  const professionalTitleWithPerson = /\b(?:dr|doctor|nurse|pharmacist|radiographer|lab\s*(?:scientist|tech)|physiotherapist|optometrist|dentist)\.?\s+[a-z]/i.test(question) && /where|working|appear|appearing|facilit|registration|reg\.?\s*no|exist/i.test(question);
   const staffLicenceContext = /(?:staff|doctor|nurse|pharmacist|radiographer|lab\s+(?:scientist|tech)|personnel|professional)\b.*\b(?:registration\s+number|reg\.?\s*no|folio|licen[cs]e)/i.test(question);
   const licencePrefixContext = /\b(?:MDCN|MLSCN|NMCN|PCN|RRBN|RADCN|EHORECON|CHPRBN|MRTB|ODORBN|OPTOM|FMLSCN)\b/i.test(question);
 
-  return explicitStaffContext || staffLicenceContext || licencePrefixContext;
+  return explicitStaffContext || professionalTitleWithPerson || staffLicenceContext || licencePrefixContext;
 }
 
 export function answerStaffQuestion(question: string): StaffQuestionAnswer {
@@ -501,7 +632,7 @@ export function answerStaffQuestion(question: string): StaffQuestionAnswer {
 
   if (records.length === 0) {
     return {
-      answer: "No structured staff-name records have been indexed from the portal cache yet. The current captured portal details include staff complement counts, but not the professional staff rows with names and registration numbers. When the portal capture can read the Professional Staff section, this index will answer staff workplace and registration-number questions offline.",
+      answer: "No structured staff-name records have been indexed from the portal cache yet. The current captured portal details include staff complement counts, but not the professional staff rows with names and registration numbers. Run a Full Detail Scan or capture facility detail pages with the Professional Staff section visible, then ask again.",
       summary: { totalStaffRecords: 0, issueCounts, note: "Staff complement counts are available, but staff names are not yet present in the detail cache." },
       rows: [],
     };
@@ -509,46 +640,61 @@ export function answerStaffQuestion(question: string): StaffQuestionAnswer {
 
   if (/manipulat|duplicate|same\s+registration|integrity|fraud|multiple\s+facilities|several\s+facilities/i.test(question)) {
     const limitedIssues = issues.slice(0, 10);
-    const rows = limitedIssues.flatMap((issue) => issue.records.slice(0, 5).map((record) => ({ issue: issue.type, issueSummary: issue.summary, ...publicRow(record) })));
+    const rows = limitedIssues.flatMap((issue) => issue.records.slice(0, 5).map((record) => ({ issue: issue.type, issueSummary: issue.summary, ...publicStaffRow(record) })));
     const answer = issues.length
-      ? "I found " + issues.length + " staff integrity issue(s) in the indexed portal staff records. The most important checks are repeated registration numbers across names/facilities and staff names appearing with multiple registration numbers."
+      ? "I found " + issues.length.toLocaleString() + " staff integrity issue(s) in the indexed portal staff records. I checked repeated registration numbers across names/facilities and staff names appearing with multiple registration numbers."
       : "I did not find staff registration-number integrity issues in the indexed portal staff records.";
     return { answer, summary: { totalStaffRecords: records.length, issueCounts, issueCount: issues.length }, rows };
   }
 
   const lookupQuery = extractStaffLookupQuery(question);
-  const matches = searchStaffIntelligence(lookupQuery, records).slice(0, 25);
 
-  if (!lookupQuery) {
+  if (!lookupQuery || /^(this name|the name|name)$/i.test(lookupQuery)) {
     return {
-      answer: "The staff index currently contains " + records.length + " structured staff record(s). Ask with a staff name or registration number, for example: where is Dr. Example working presently?",
+      answer: "The professional staff index currently contains " + records.length.toLocaleString() + " staff portal record(s). Please include the staff name or registration number, for example: where is Dr. Example working presently?",
       summary: { totalStaffRecords: records.length, issueCounts },
-      rows: records.slice(0, 15).map(publicRow),
+      rows: latestDistinctFacilityRecords(records).slice(0, 15).map(publicStaffRow),
     };
   }
 
+  const matches = searchStaffIntelligence(lookupQuery, records);
+  const latestFacilities = latestDistinctFacilityRecords(matches);
+
   if (matches.length === 0) {
     return {
-      answer: "I could not find a staff record matching " + lookupQuery + " in the indexed portal cache. If the facility has not been captured with its Professional Staff section visible, run a detail capture for that facility after opening the staff section on the portal.",
-      summary: { totalStaffRecords: records.length, query: lookupQuery, matchCount: 0, issueCounts },
+      answer: "I could not find a medical professional record matching " + lookupQuery + " in the indexed HEFAMAA portal staff cache. Please confirm the spelling or registration number. If the facility has not been captured with its Professional Staff section visible, run a detail capture for that facility and ask again.",
+      summary: { totalStaffRecords: records.length, query: lookupQuery, matchCount: 0, distinctFacilityCount: 0, issueCounts },
       rows: [],
     };
   }
 
-  const top = matches[0];
-  const answerParts = [
-    top.staffName || lookupQuery,
-    "is indexed under " + (top.facilityName || "an unnamed facility"),
-  ];
-  if (top.category) answerParts.push("category: " + top.category);
-  if (top.profession) answerParts.push("profession: " + top.profession);
-  if (top.registrationNumber) answerParts.push("registration number: " + top.registrationNumber);
-  if (top.renewalYear) answerParts.push("portal year: " + top.renewalYear);
-  if (top.registrationStatus) answerParts.push("status: " + top.registrationStatus);
+  const registrations = uniqueRegistrationNumbers(matches);
+  const professions = uniqueProfessions(matches);
+  const displayName = matches.find((record) => record.staffName)?.staffName || lookupQuery;
+  const facilityText = listFacilities(latestFacilities);
+  const answerPrefix = asksForFacilityAppearance(question)
+    ? displayName + " appears in " + latestFacilities.length.toLocaleString() + " distinct facilit" + (latestFacilities.length === 1 ? "y" : "ies") + " in the indexed portal staff cache"
+    : displayName + " is currently indexed under " + latestFacilities.length.toLocaleString() + " distinct facilit" + (latestFacilities.length === 1 ? "y" : "ies") + " in the portal staff cache";
+
+  const details = [
+    answerPrefix,
+    "portal year records found: " + matches.length.toLocaleString(),
+    professions.length ? "profession(s): " + professions.join(", ") : "",
+    registrations.length ? "registration number(s): " + registrations.join(", ") : "",
+    facilityText ? "facilities: " + facilityText : "",
+  ].filter(Boolean);
 
   return {
-    answer: answerParts.join("; ") + ". I found " + matches.length + " matching staff record(s).",
-    summary: { totalStaffRecords: records.length, query: lookupQuery, matchCount: matches.length, issueCounts },
-    rows: matches.map(publicRow),
+    answer: details.join(". ") + ".",
+    summary: {
+      totalStaffRecords: records.length,
+      query: lookupQuery,
+      portalRecordMatches: matches.length,
+      distinctFacilityCount: latestFacilities.length,
+      registrationNumbers: registrations,
+      professions,
+      issueCounts,
+    },
+    rows: latestFacilities.map(publicStaffRow),
   };
 }
