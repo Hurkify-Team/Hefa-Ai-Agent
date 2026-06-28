@@ -198,34 +198,65 @@ async function callInternalApi<T>(requestUrl: string, path: string, init?: Reque
   return payload.data as T;
 }
 
-async function answerHefNoViaSearch(question: string, category: string | undefined, requestUrl: string) {
-  const query = extractHefNoQuery(question);
+async function answerHefNoViaSearch(question: string, category: string | undefined, _requestUrl: string) {
+  const sheetAnalyzer = await import("@/lib/sheetAnalyzer");
+  const query = sheetAnalyzer.extractHefamaaNumberLookupQuery(question) || extractHefNoQuery(question);
+
   if (!query) {
-    return { answer: "Tell me the facility name so I can look up the HEFAMAA number from HEF/NO or Facility Code.", rows: undefined };
+    return {
+      answer: "Tell me the facility name so I can look up the official HEFAMAA number from the Google Sheet HEF/NO column, with Old Database Facility Code as fallback.",
+      rows: undefined,
+    };
   }
 
-  const searchPath = "/api/facilities/search?query=" + encodeURIComponent(query) + (category ? "&category=" + encodeURIComponent(category) : "");
-  const result = await callInternalApi<unknown>(requestUrl, searchPath);
-  // The workbook search API returns a plain array today, while older UI helpers
-  // returned { matches } or { results }. Supporting all three shapes keeps HEF/NO
-  // answers tied to the real spreadsheet row instead of silently dropping matches.
-  const matches = (Array.isArray(result)
-    ? result
-    : (result && typeof result === "object"
-      ? ((result as { matches?: Array<Record<string, unknown>>; results?: Array<Record<string, unknown>> }).matches
-        ?? (result as { matches?: Array<Record<string, unknown>>; results?: Array<Record<string, unknown>> }).results
-        ?? [])
-      : [])) as Array<Record<string, unknown>>;
-  const best = matches[0];
-  if (!best) return { answer: "No facility matching \"" + query + "\" was found in the workbook sources.", rows: undefined };
+  const lookup = await sheetAnalyzer.lookupHefamaaNumberAcrossSources({ query, category, limit: 10 });
+  const best = lookup.bestMatch;
 
-  const hefNo = clean(best.hefNo || best["HEF/NO"] || best["Facility Code"] || best.facilityCode);
-  const facilityName = clean(best.facilityName || best["Facility Name"] || query);
-  const sourceLabel = clean(best.sourceLabel || best.source || "workbook source");
-  const sourceColumn = clean(best.source) === "old" ? "Facility Code" : "HEF/NO";
+  if (!best) {
+    return {
+      answer: "I could not find a facility matching \"" + query + "\" in the HEFAMAA Active Database or Old Hefamaa Database fallback. Please confirm the facility spelling or provide another identifier such as address, LGA, phone, or email.",
+      rows: [],
+      summary: { query, searchedSources: lookup.searchedSources, matchCount: 0 },
+    };
+  }
+
+  const numberLabel = best.source === "old" ? "Facility Code" : "HEF/NO";
+  const facilityName = clean(best.facilityName || query);
+  const hefNo = clean(best.hefNo);
+  const sourceNote = best.source === "old"
+    ? "I used Old Hefamaa Database fallback because the active database did not provide a usable HEF/NO match."
+    : "I used the HEFAMAA Active Database HEF/NO column on the same row as the facility name.";
+
   return {
-    answer: "The HEFAMAA number for " + facilityName + " is " + (hefNo || "Not found") + ". I got it from " + sourceLabel + " using the " + sourceColumn + " column on the same row as the facility name.",
-    rows: matches,
+    answer: [
+      "The official HEFAMAA number for " + facilityName + " is " + (hefNo || "not recorded") + ".",
+      "Source: " + best.sourceLabel + ", category " + best.category + ", row " + (best.rowIndex + 2) + ", column " + numberLabel + ".",
+      sourceNote,
+      best.address ? "Address: " + best.address + "." : "",
+      best.lga ? "LGA: " + best.lga + "." : "",
+    ].filter(Boolean).join(" "),
+    rows: lookup.matches.map((match) => ({
+      Source: match.sourceLabel,
+      Category: match.category,
+      "Workbook Row": match.rowIndex + 2,
+      "HEF/NO / Facility Code": match.hefNo || null,
+      "Facility Name": match.facilityName || null,
+      Address: match.address || null,
+      LGA: match.lga || null,
+      Contact: match.contact || null,
+      Email: match.email || null,
+      source: match.source,
+      sourceLabel: match.sourceLabel,
+      category: match.category,
+      rowIndex: match.rowIndex,
+      hefNo: match.hefNo,
+      facilityName: match.facilityName,
+      address: match.address,
+      lga: match.lga,
+      contact: match.contact,
+      email: match.email,
+    })),
+    summary: { query, searchedSources: lookup.searchedSources, matchCount: lookup.matches.length, bestSource: best.source },
   };
 }
 
@@ -321,6 +352,25 @@ export async function POST(request: Request) {
   try {
     const payload = askAgentSchema.parse(await request.json());
     const requestedSources = payload.sources?.length ? payload.sources : ["portal", "sheets"] as AgentSource[];
+
+    if (isHefNoQuestion(payload.question)) {
+      const result = await answerHefNoViaSearch(payload.question, payload.category, request.url);
+      return ok({
+        question: payload.question,
+        answer: "For HEFAMAA number questions, I used the Google Sheet database first. Portal E-HEFAMAA ID is a separate portal identifier.\n\n" + result.answer,
+        sources: [{
+          source: "sheets",
+          label: SOURCE_LABELS.sheets,
+          status: "ok",
+          answer: result.answer,
+          rows: compactRows(result.rows, 10),
+          summary: result.summary,
+        }],
+        rows: compactRows(result.rows, 10),
+        summary: result.summary,
+        actions: [],
+      });
+    }
 
     if (requestedSources.includes("portal") && isStaffQuestion(payload.question)) {
       const staff = await import("@/lib/staffIntelligence");
