@@ -1,5 +1,3 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import path from "path";
 import { z } from "zod";
 
 export const helpDeskTicketSchema = z.object({
@@ -60,10 +58,7 @@ const UNIT_BY_CATEGORY: Record<string, string> = {
   "Public Enquiry": "Front Desk",
 };
 
-function helpDeskPath() {
-  const configured = process.env.HELPDESK_DATA_PATH?.trim() || "data/help-desk-records.json";
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
-}
+let memoryStore: HelpDeskStore | null = null;
 
 function seedStore(): HelpDeskStore {
   return {
@@ -92,21 +87,12 @@ function seedStore(): HelpDeskStore {
 }
 
 function readStore(): HelpDeskStore {
-  const file = helpDeskPath();
-  if (!existsSync(file)) return seedStore();
-
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return { tickets: Array.isArray(parsed.tickets) ? parsed.tickets : [] };
-  } catch {
-    return seedStore();
-  }
+  if (!memoryStore) memoryStore = seedStore();
+  return { tickets: [...memoryStore.tickets] };
 }
 
 function writeStore(store: HelpDeskStore) {
-  const file = helpDeskPath();
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
+  memoryStore = { tickets: [...store.tickets] };
 }
 
 export function categorizeHelpDeskText(text: string) {

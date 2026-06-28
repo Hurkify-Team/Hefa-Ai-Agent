@@ -1,6 +1,3 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import path from "path";
-
 export type AgencyMailRecord = {
   category: string;
   from: string;
@@ -24,10 +21,7 @@ const MAIL_CATEGORY_RULES = [
   { category: "General Correspondence", keywords: ["letter", "request", "information", "meeting"] },
 ];
 
-function gmailPath() {
-  const configured = process.env.GMAIL_DATA_PATH?.trim() || "data/gmail-intelligence-records.json";
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
-}
+let memoryStore: GmailStore | null = null;
 
 function seedStore(): GmailStore {
   return {
@@ -55,21 +49,12 @@ function seedStore(): GmailStore {
 }
 
 function readStore(): GmailStore {
-  const file = gmailPath();
-  if (!existsSync(file)) return seedStore();
-
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8"));
-    return { mailRecords: Array.isArray(parsed.mailRecords) ? parsed.mailRecords : [] };
-  } catch {
-    return seedStore();
-  }
+  if (!memoryStore) memoryStore = seedStore();
+  return { mailRecords: [...memoryStore.mailRecords] };
 }
 
 function writeStore(store: GmailStore) {
-  const file = gmailPath();
-  mkdirSync(path.dirname(file), { recursive: true });
-  writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
+  memoryStore = { mailRecords: [...store.mailRecords] };
 }
 
 export function categorizeMailText(text: string) {

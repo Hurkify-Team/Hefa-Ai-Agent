@@ -1,6 +1,4 @@
 import { createHmac, pbkdf2Sync, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import path from "node:path";
 
 import type { NextResponse } from "next/server";
 
@@ -28,58 +26,27 @@ type CreateUserInput = {
   status?: TeamStatus;
 };
 
-function authDataPath() {
-  const configuredPath = process.env.HEFAMAA_AUTH_USERS_PATH?.trim() || "data/auth-users.json";
-  return path.isAbsolute(configuredPath) ? configuredPath : path.join(process.cwd(), configuredPath);
-}
-
-function passwordResetDataPath() {
-  const configuredPath = process.env.HEFAMAA_AUTH_RESETS_PATH?.trim() || "data/auth-password-resets.json";
-  return path.isAbsolute(configuredPath) ? configuredPath : path.join(process.cwd(), configuredPath);
-}
+let memoryUsers: StoredAuthUser[] = [];
+let memoryPasswordResetTokens: StoredPasswordReset[] = [];
 
 function sessionSecret() {
   return process.env.AUTH_SESSION_SECRET?.trim() || process.env.NEXTAUTH_SECRET?.trim() || "hefamaa-local-dev-session-secret-change-me";
 }
 
 function readStoredUsers(): StoredAuthUser[] {
-  const file = authDataPath();
-  if (!existsSync(file)) return [];
-
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as StoredAuthUser[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  return [...memoryUsers];
 }
 
 function writeStoredUsers(users: StoredAuthUser[]) {
-  const file = authDataPath();
-  mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + ".tmp";
-  writeFileSync(tmp, JSON.stringify(users, null, 2));
-  renameSync(tmp, file);
+  memoryUsers = [...users];
 }
 
 function readPasswordResetTokens(): StoredPasswordReset[] {
-  const file = passwordResetDataPath();
-  if (!existsSync(file)) return [];
-
-  try {
-    const parsed = JSON.parse(readFileSync(file, "utf8")) as StoredPasswordReset[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+  return [...memoryPasswordResetTokens];
 }
 
 function writePasswordResetTokens(tokens: StoredPasswordReset[]) {
-  const file = passwordResetDataPath();
-  mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + ".tmp";
-  writeFileSync(tmp, JSON.stringify(tokens, null, 2));
-  renameSync(tmp, file);
+  memoryPasswordResetTokens = [...tokens];
 }
 
 function normalizeEmail(email: string) {
