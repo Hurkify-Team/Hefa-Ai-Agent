@@ -38,8 +38,9 @@ function compactDashboardDeps(): CacheDeps {
 }
 
 function depsMatch(left: CacheDeps | undefined, right: CacheDeps) {
-  return Boolean(left)
-    && left.notificationLogsMtimeMs === right.notificationLogsMtimeMs
+  if (!left) return false;
+
+  return left.notificationLogsMtimeMs === right.notificationLogsMtimeMs
     && left.portalListMtimeMs === right.portalListMtimeMs
     && left.portalQaMtimeMs === right.portalQaMtimeMs;
 }

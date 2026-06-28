@@ -262,6 +262,7 @@ async function answerHefNoViaSearch(question: string, category: string | undefin
 
 async function runSource(source: AgentSource, question: string, category: string | undefined, requestUrl: string): Promise<AgentSourceResult> {
   if (source === "portal") {
+    const { answerPortalCacheQuestion } = await import("@/lib/portalCacheQa");
     const cacheAnswer = answerPortalCacheQuestion(question);
     const result = (cacheAnswer ?? answerPortalSummaryQuestion(question)) as { answer: string; record?: Record<string, unknown>; rows?: unknown; summary?: unknown };
     return {
