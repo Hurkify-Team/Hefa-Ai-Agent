@@ -23,6 +23,11 @@ Add these in the Render dashboard or through Blueprint sync prompts:
 - `GMAIL_SMTP_USER`, `GMAIL_SMTP_APP_PASSWORD`, and `GMAIL_SMTP_FROM` if Gmail SMTP reminders are enabled
 - `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, and `GMAIL_REFRESH_TOKEN` if Gmail intelligence sync is enabled
 
+
+## Root Directory Requirement
+
+Render must build this service from the repository root. Do not set the Render service Root Directory to `frontend`. The root directory should be blank in the dashboard, or `rootDir: .` should be applied from `render.yaml`. If Root Directory is set to `frontend`, Render will look for `frontend/Dockerfile` and fail with `open Dockerfile: no such file or directory`.
+
 ## Portal Automation Note
 
 Render runs without a visible desktop, so `HEFAMAA_PORTAL_HEADLESS=true` is set in `render.yaml`. Local development still opens a visible portal browser by default. For production portal scans, the portal session must be valid through the persisted storage state on the Render disk.
