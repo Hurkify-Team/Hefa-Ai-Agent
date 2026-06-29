@@ -2,16 +2,13 @@ import { NextResponse } from "next/server";
 
 import { initializeAuthStorage } from "@/lib/auth";
 import { listAuditEntries } from "@/lib/auditLog";
+import { assertGoogleSheetsConfigured, readSheetTabs } from "@/lib/googleSheets";
 import { runtimeDataStatus } from "@/lib/runtimeData";
 
 export const runtime = "nodejs";
 
 function configured(name: string) {
   return Boolean(process.env[name]?.trim());
-}
-
-function googleSheetConfigured() {
-  return configured("GOOGLE_SHEET_ID") && configured("GOOGLE_SERVICE_ACCOUNT_EMAIL") && configured("GOOGLE_PRIVATE_KEY");
 }
 
 export async function GET() {
@@ -21,6 +18,8 @@ export async function GET() {
   const auth = initializeAuthStorage();
   let auditReady = true;
   let auditError: string | null = null;
+  let googleSheetsReady = true;
+  let googleSheetsError: string | null = null;
 
   try {
     listAuditEntries(1);
@@ -30,12 +29,23 @@ export async function GET() {
     console.error("[/api/health] Audit storage check failed", error);
   }
 
+  try {
+    assertGoogleSheetsConfigured();
+    await readSheetTabs();
+  } catch (error) {
+    googleSheetsReady = false;
+    googleSheetsError = error instanceof Error ? error.message : "Google Sheets configuration missing or invalid";
+    console.error("[/api/health] Google Sheets readiness check failed", error);
+  }
+
   const payload = {
-    success: storage.dataDirExists && auth.authReady && auditReady,
+    success: storage.dataDirExists && auth.authReady && auditReady && googleSheetsReady,
     environment: process.env.NODE_ENV || "development",
     dataDirExists: storage.dataDirExists,
     authReady: auth.authReady,
-    googleSheetConfigured: googleSheetConfigured(),
+    googleSheetConfigured: googleSheetsReady,
+    googleSheetsReady,
+    googleSheetsError,
     geminiConfigured: configured("GEMINI_API_KEY"),
     portalUrlConfigured: configured("HEFAMAA_PORTAL_URL"),
     auditReady,
@@ -48,6 +58,7 @@ export async function GET() {
     dataDirExists: payload.dataDirExists,
     authReady: payload.authReady,
     googleSheetConfigured: payload.googleSheetConfigured,
+    googleSheetsReady: payload.googleSheetsReady,
     geminiConfigured: payload.geminiConfigured,
     portalUrlConfigured: payload.portalUrlConfigured,
     auditReady: payload.auditReady,

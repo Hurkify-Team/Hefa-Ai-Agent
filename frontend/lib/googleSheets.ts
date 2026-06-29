@@ -87,6 +87,8 @@ const runtimeCache =
     sheetRows: new Map<string, CacheEntry<SheetRowsResult>>(),
   });
 
+const GOOGLE_SHEETS_ENV_KEYS = ["GOOGLE_SHEET_ID", "GOOGLE_SERVICE_ACCOUNT_EMAIL", "GOOGLE_PRIVATE_KEY"] as const;
+
 function requiredEnv(name: string) {
   const value = process.env[name]?.trim();
 
@@ -97,8 +99,8 @@ function requiredEnv(name: string) {
   return value;
 }
 
-function getPrivateKey() {
-  let key = requiredEnv("GOOGLE_PRIVATE_KEY");
+function normalizeGooglePrivateKey(rawKey: string) {
+  let key = rawKey.trim();
 
   if (
     (key.startsWith('"') && key.endsWith('"')) ||
@@ -108,6 +110,39 @@ function getPrivateKey() {
   }
 
   return key.replace(/\\n/g, "\n");
+}
+
+function getPrivateKey() {
+  return normalizeGooglePrivateKey(requiredEnv("GOOGLE_PRIVATE_KEY"));
+}
+
+export function getGoogleSheetsConfigStatus() {
+  const missing = GOOGLE_SHEETS_ENV_KEYS.filter((name) => !process.env[name]?.trim());
+  const privateKey = process.env.GOOGLE_PRIVATE_KEY?.trim();
+  const normalizedPrivateKey = privateKey ? normalizeGooglePrivateKey(privateKey) : "";
+  const privateKeyLooksValid = Boolean(
+    normalizedPrivateKey.includes("-----BEGIN PRIVATE KEY-----") &&
+      normalizedPrivateKey.includes("-----END PRIVATE KEY-----"),
+  );
+
+  return {
+    missing,
+    privateKeyLooksValid,
+    ready: missing.length === 0 && privateKeyLooksValid,
+  };
+}
+
+export function assertGoogleSheetsConfigured() {
+  const status = getGoogleSheetsConfigStatus();
+  if (!status.ready) {
+    console.error("[googleSheets] Google Sheets configuration missing or invalid", {
+      missing: status.missing,
+      privateKeyLooksValid: status.privateKeyLooksValid,
+    });
+    throw new Error("Google Sheets configuration missing or invalid");
+  }
+
+  return status;
 }
 
 const spreadsheetIdContext = new AsyncLocalStorage<string>();
