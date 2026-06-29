@@ -11,58 +11,79 @@ function configured(name: string) {
   return Boolean(process.env[name]?.trim());
 }
 
-export async function GET() {
-  console.info("[/api/health] Health check started");
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unknown error";
+}
 
-  const storage = runtimeDataStatus();
-  const auth = initializeAuthStorage();
-  let auditReady = true;
-  let auditError: string | null = null;
-  let googleSheetsReady = true;
-  let googleSheetsError: string | null = null;
+export async function GET() {
+  console.info("START:", "/api/health");
+
+  const errors: Record<string, string> = {};
+  const checks = {
+    googleSheets: false,
+    gemini: false,
+    auth: false,
+    storage: false,
+    notifications: false,
+    playwright: false,
+  };
+
+  try {
+    const storage = runtimeDataStatus();
+    checks.storage = storage.dataDirExists;
+  } catch (error) {
+    errors.storage = errorMessage(error);
+    console.error("ERROR:", "/api/health storage failed", error instanceof Error ? { message: error.message, stack: error.stack } : error);
+  }
+
+  try {
+    const auth = initializeAuthStorage();
+    checks.auth = auth.authReady;
+    if (!auth.authReady) errors.auth = "Auth admin env is missing or invalid";
+  } catch (error) {
+    errors.auth = errorMessage(error);
+    console.error("ERROR:", "/api/health auth failed", error instanceof Error ? { message: error.message, stack: error.stack } : error);
+  }
 
   try {
     listAuditEntries(1);
   } catch (error) {
-    auditReady = false;
-    auditError = error instanceof Error ? error.message : "Audit storage failed";
-    console.error("[/api/health] Audit storage check failed", error);
+    errors.audit = errorMessage(error);
+    console.error("ERROR:", "/api/health audit failed", error instanceof Error ? { message: error.message, stack: error.stack } : error);
   }
 
   try {
     assertGoogleSheetsConfigured();
     await readSheetTabs();
+    checks.googleSheets = true;
   } catch (error) {
-    googleSheetsReady = false;
-    googleSheetsError = error instanceof Error ? error.message : "Google Sheets configuration missing or invalid";
-    console.error("[/api/health] Google Sheets readiness check failed", error);
+    errors.googleSheets = errorMessage(error);
+    console.error("ERROR:", "/api/health googleSheets failed", error instanceof Error ? { message: error.message, stack: error.stack } : error);
   }
 
-  const payload = {
-    success: storage.dataDirExists && auth.authReady && auditReady && googleSheetsReady,
-    environment: process.env.NODE_ENV || "development",
-    dataDirExists: storage.dataDirExists,
-    authReady: auth.authReady,
-    googleSheetConfigured: googleSheetsReady,
-    googleSheetsReady,
-    googleSheetsError,
-    geminiConfigured: configured("GEMINI_API_KEY"),
-    portalUrlConfigured: configured("HEFAMAA_PORTAL_URL"),
-    auditReady,
-    missingAuthEnv: auth.missingEnv,
-    auditError,
-  };
+  checks.gemini = configured("GEMINI_API_KEY");
+  if (!checks.gemini) errors.gemini = "GEMINI_API_KEY is not configured";
 
-  console.info("[/api/health] Health check completed", {
-    success: payload.success,
-    dataDirExists: payload.dataDirExists,
-    authReady: payload.authReady,
-    googleSheetConfigured: payload.googleSheetConfigured,
-    googleSheetsReady: payload.googleSheetsReady,
-    geminiConfigured: payload.geminiConfigured,
-    portalUrlConfigured: payload.portalUrlConfigured,
-    auditReady: payload.auditReady,
-  });
+  checks.notifications = configured("SMTP_HOST") || configured("RESEND_API_KEY") || configured("TERMII_API_KEY") || configured("GMAIL_SMTP_USER");
+  if (!checks.notifications) errors.notifications = "Notification provider is not configured";
 
-  return NextResponse.json(payload, { status: payload.success ? 200 : 503 });
+  checks.playwright = configured("HEFAMAA_PORTAL_URL");
+  if (!checks.playwright) errors.playwright = "HEFAMAA_PORTAL_URL is not configured";
+
+  const success = Object.values(checks).every(Boolean);
+  console.info("SUCCESS:", "/api/health completed", { success, checks });
+
+  return NextResponse.json(
+    {
+      success,
+      environment: process.env.NODE_ENV || "development",
+      checks,
+      errors,
+      googleSheetsReady: checks.googleSheets,
+      googleSheetConfigured: checks.googleSheets,
+      geminiConfigured: checks.gemini,
+      portalUrlConfigured: checks.playwright,
+    },
+    { status: success ? 200 : 503 },
+  );
 }

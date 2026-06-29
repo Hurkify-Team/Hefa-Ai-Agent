@@ -1,5 +1,5 @@
+import { safeApi } from "@/lib/apiResponse";
 import { safeRequestJson } from "@/lib/safeJson";
-import { NextResponse } from "next/server";
 import {
   createHelpDeskTicket,
   getHelpDeskSummary,
@@ -9,26 +9,28 @@ import {
   updateHelpDeskTicket,
 } from "@/lib/helpDesk";
 
+export const runtime = "nodejs";
+
+function ticketPayload(extra: Record<string, unknown> = {}) {
+  return { summary: getHelpDeskSummary(), tickets: listHelpDeskTickets(), ...extra };
+}
+
 export async function GET() {
-  return NextResponse.json({ ok: true, data: { summary: getHelpDeskSummary(), tickets: listHelpDeskTickets() } });
+  return safeApi("/api/help-desk/tickets", () => ticketPayload());
 }
 
 export async function POST(request: Request) {
-  try {
+  return safeApi("/api/help-desk/tickets", async () => {
     const body = await safeRequestJson(request, "app/api/help-desk/tickets/route.ts");
     const ticket = createHelpDeskTicket(helpDeskTicketSchema.parse(body));
-    return NextResponse.json({ ok: true, data: { summary: getHelpDeskSummary(), ticket, tickets: listHelpDeskTickets() } });
-  } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unable to create help desk ticket." }, { status: 400 });
-  }
+    return ticketPayload({ ticket });
+  }, 400);
 }
 
 export async function PATCH(request: Request) {
-  try {
+  return safeApi("/api/help-desk/tickets", async () => {
     const body = await safeRequestJson(request, "app/api/help-desk/tickets/route.ts");
     const ticket = updateHelpDeskTicket(helpDeskTicketUpdateSchema.parse(body));
-    return NextResponse.json({ ok: true, data: { summary: getHelpDeskSummary(), ticket, tickets: listHelpDeskTickets() } });
-  } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Unable to update help desk ticket." }, { status: 400 });
-  }
+    return ticketPayload({ ticket });
+  }, 400);
 }

@@ -107,21 +107,37 @@ export default function DashboardPage() {
     setIsLoading(true);
     setError(null);
 
-    try {
-      const [nextSummary, nextTabs, nextAuditEntries] = await Promise.all([
-        fetchApi<WorkbookReportSummary>("/api/reports/summary"),
-        fetchApi<SheetTab[]>("/api/sheets/tabs"),
-        fetchApi<AuditEntry[]>("/api/audit/list?limit=5"),
-      ]);
+    const [summaryResult, tabsResult, auditResult] = await Promise.allSettled([
+      fetchApi<WorkbookReportSummary>("/api/reports/summary"),
+      fetchApi<SheetTab[]>("/api/sheets/tabs"),
+      fetchApi<AuditEntry[]>("/api/audit/list?limit=5"),
+    ]);
 
-      setSummary(nextSummary);
-      setTabs(nextTabs);
-      setAuditEntries(nextAuditEntries);
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "Unable to load dashboard");
-    } finally {
-      setIsLoading(false);
+    const warnings: string[] = [];
+
+    if (summaryResult.status === "fulfilled") {
+      setSummary(summaryResult.value);
+    } else {
+      setSummary(null);
+      warnings.push("Reports summary unavailable: " + (summaryResult.reason instanceof Error ? summaryResult.reason.message : "Unknown error"));
     }
+
+    if (tabsResult.status === "fulfilled") {
+      setTabs(tabsResult.value);
+    } else {
+      setTabs([]);
+      warnings.push("Sheet tabs unavailable: " + (tabsResult.reason instanceof Error ? tabsResult.reason.message : "Unknown error"));
+    }
+
+    if (auditResult.status === "fulfilled") {
+      setAuditEntries(auditResult.value);
+    } else {
+      setAuditEntries([]);
+      warnings.push("Audit log unavailable: " + (auditResult.reason instanceof Error ? auditResult.reason.message : "Unknown error"));
+    }
+
+    setError(warnings.length ? warnings.join(" ") : null);
+    setIsLoading(false);
   }
 
   async function askQuestion(event: FormEvent<HTMLFormElement>) {

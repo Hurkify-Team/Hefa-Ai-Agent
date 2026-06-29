@@ -1,4 +1,4 @@
-import { fail, ok } from "@/lib/apiResponse";
+import { safeApi } from "@/lib/apiResponse";
 import { seedPortalScanSnapshotFromCurrentCache } from "@/lib/portalIntelligence";
 import { readPortalScanSnapshots, summarizePortalScanHistory, type PortalScanSnapshot } from "@/lib/portalScanSnapshots";
 
@@ -29,17 +29,15 @@ function snapshotResponse() {
 }
 
 export async function GET() {
-  return ok(snapshotResponse());
+  return safeApi("/api/portal/snapshots", () => snapshotResponse());
 }
 
 export async function POST() {
-  try {
+  return safeApi("/api/portal/snapshots", () => {
     const snapshot = seedPortalScanSnapshotFromCurrentCache();
-    return ok({
+    return {
       ...snapshotResponse(),
       snapshot: compactSnapshot(snapshot),
-    });
-  } catch (error) {
-    return fail(error, 500);
-  }
+    };
+  });
 }

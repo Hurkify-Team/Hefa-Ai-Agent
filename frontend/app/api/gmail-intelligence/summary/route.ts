@@ -1,13 +1,12 @@
-import { NextResponse } from "next/server";
+import { safeApi } from "@/lib/apiResponse";
 import { getGmailConnectionStatus, getGmailSummary, listAgencyMailRecords } from "@/lib/gmailIntelligence";
 
+export const runtime = "nodejs";
+
 export async function GET() {
-  return NextResponse.json({
-    ok: true,
-    data: {
-      gmail: getGmailConnectionStatus(),
-      mailRecords: listAgencyMailRecords(),
-      summary: getGmailSummary(),
-    },
-  });
+  return safeApi("/api/gmail-intelligence/summary", () => ({
+    gmail: getGmailConnectionStatus(),
+    mailRecords: listAgencyMailRecords(),
+    summary: getGmailSummary(),
+  }));
 }
