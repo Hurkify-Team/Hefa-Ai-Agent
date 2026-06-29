@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { FormEvent, useEffect, useState } from "react";
 import { Loader2, Plus, ShieldCheck } from "lucide-react";
 
@@ -10,7 +11,7 @@ type Rule = { category: string; channel: string[]; condition_field: string; cond
 
 async function fetchJson<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = await response.json() as ApiResult<T>;
+  const payload = await safeJsonResponse<ApiResult<T>>(response, "app/notifications/rules/page.tsx");
   if (!payload.ok) throw new Error(payload.error);
   return payload.data;
 }

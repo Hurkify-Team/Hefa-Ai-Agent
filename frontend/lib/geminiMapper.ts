@@ -1,3 +1,4 @@
+import { safeJsonParse, safeJsonResponse } from "@/lib/safeJson";
 import type { FieldMappingInput, FieldMappingResult } from "@/types/ai";
 import type { SheetRow } from "@/types/sheet";
 import { normalizeHeaderName } from "@/lib/normalizers";
@@ -386,13 +387,14 @@ async function mapWithGemini(input: FieldMappingInput): Promise<FieldMappingResu
     throw new Error("Gemini mapping failed: " + (message || response.statusText));
   }
 
-  const text = extractGeminiText(await response.json());
+  const text = extractGeminiText(await safeJsonResponse<Record<string, any>>(response, "lib/geminiMapper.ts"));
 
   if (!text) {
     throw new Error("Gemini mapping failed: empty response");
   }
 
-  return applyProfessionalStaffCounts(input, coerceGeminiResult(input, JSON.parse(text)));
+  const parsed = safeJsonParse(text, "lib/geminiMapper.ts Gemini content");
+  return applyProfessionalStaffCounts(input, coerceGeminiResult(input, parsed));
 }
 
 export async function mapPortalTextToSheetHeaders(input: FieldMappingInput): Promise<FieldMappingResult> {

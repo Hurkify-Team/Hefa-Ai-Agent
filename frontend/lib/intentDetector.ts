@@ -1,3 +1,4 @@
+import { safeJsonParse, safeJsonResponse } from "@/lib/safeJson";
 import { z } from "zod";
 
 import type { ConversationMemory } from "@/lib/conversationMemory";
@@ -249,9 +250,9 @@ async function geminiDetect(question: string, memory?: ConversationMemory): Prom
     });
 
     if (!response.ok) return null;
-    const payload = await response.json();
+    const payload = await safeJsonResponse<Record<string, any>>(response, "lib/intentDetector.ts");
     const text = payload?.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? "").join("") ?? "";
-    return detectedIntentSchema.parse(JSON.parse(extractJson(text)));
+    return detectedIntentSchema.parse(safeJsonParse(extractJson(text), "lib/intentDetector.ts Gemini intent"));
   } catch {
     return null;
   } finally {

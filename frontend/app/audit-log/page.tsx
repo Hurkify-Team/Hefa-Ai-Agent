@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -35,7 +36,7 @@ const actionLabels: Record<AuditActionType, string> = {
 
 async function fetchApi<T>(url: string) {
   const response = await fetch(url, { cache: "no-store" });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/audit-log/page.tsx"));
 
   if (!payload.ok) {
     throw new Error(payload.error);

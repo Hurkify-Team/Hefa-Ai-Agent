@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -28,7 +29,7 @@ export default function SignInPage() {
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
-      const payload = await response.json();
+      const payload = await safeJsonResponse<Record<string, any>>(response, "app/sign-in/page.tsx");
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Unable to sign in.");
       router.replace(nextPath);
     } catch (error) {

@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -13,7 +14,7 @@ const resetPasswordSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = resetPasswordSchema.parse(await request.json());
+    const payload = resetPasswordSchema.parse(await safeRequestJson(request, "app/api/auth/reset-password/route.ts"));
     const user = resetAuthUserPassword(payload.email, payload.resetCode, payload.password);
     return ok({ reset: true, user });
   } catch (error) {

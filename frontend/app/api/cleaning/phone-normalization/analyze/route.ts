@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -11,7 +12,7 @@ const phoneNormalizationAnalyzeSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = phoneNormalizationAnalyzeSchema.parse(await request.json().catch(() => ({})));
+    const payload = phoneNormalizationAnalyzeSchema.parse(await safeRequestJson(request, "app/api/cleaning/phone-normalization/analyze/route.ts", {}));
     return ok(await analyzePhoneNormalization(payload));
   } catch (error) {
     return fail(error);

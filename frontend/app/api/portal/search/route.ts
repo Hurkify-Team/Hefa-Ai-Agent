@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { ok, fail } from "@/lib/apiResponse";
@@ -11,7 +12,7 @@ const searchPortalSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = searchPortalSchema.parse(await request.json());
+    const payload = searchPortalSchema.parse(await safeRequestJson(request, "app/api/portal/search/route.ts"));
     return ok(await searchFacility(payload));
   } catch (error) {
     return fail(error);

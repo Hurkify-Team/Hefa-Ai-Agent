@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { NextResponse } from "next/server";
 import {
   createHelpDeskTicket,
@@ -14,7 +15,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
+    const body = await safeRequestJson(request, "app/api/help-desk/tickets/route.ts");
     const ticket = createHelpDeskTicket(helpDeskTicketSchema.parse(body));
     return NextResponse.json({ ok: true, data: { summary: getHelpDeskSummary(), ticket, tickets: listHelpDeskTickets() } });
   } catch (error) {
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
-    const body = await request.json();
+    const body = await safeRequestJson(request, "app/api/help-desk/tickets/route.ts");
     const ticket = updateHelpDeskTicket(helpDeskTicketUpdateSchema.parse(body));
     return NextResponse.json({ ok: true, data: { summary: getHelpDeskSummary(), ticket, tickets: listHelpDeskTickets() } });
   } catch (error) {

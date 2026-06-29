@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { ArrowRight, KeyRound, RotateCcw } from "lucide-react";
@@ -24,7 +25,7 @@ export default function ForgotPasswordPage() {
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
-      const payload = await response.json();
+      const payload = await safeJsonResponse<Record<string, any>>(response, "app/forgot-password/page.tsx");
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Unable to create reset code.");
       setResetCode(payload.data.resetCode);
       setStep("confirm");
@@ -46,7 +47,7 @@ export default function ForgotPasswordPage() {
         headers: { "Content-Type": "application/json" },
         method: "POST",
       });
-      const payload = await response.json();
+      const payload = await safeJsonResponse<Record<string, any>>(response, "app/forgot-password/page.tsx");
       if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Unable to reset password.");
       setStep("done");
       setMessage("Password reset successfully. You can now sign in with the new password.");

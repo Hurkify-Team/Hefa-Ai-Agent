@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
@@ -21,7 +22,7 @@ type UsersResponse = { users: AuthUser[] };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, cache: "no-store" });
-  const payload = await response.json();
+  const payload = await safeJsonResponse<Record<string, any>>(response, "app/users-roles/page.tsx");
   if (!response.ok || !payload.ok) throw new Error(payload.error ?? "Request failed.");
   return payload.data as T;
 }

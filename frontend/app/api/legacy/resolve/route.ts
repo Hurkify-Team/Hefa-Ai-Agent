@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { ok, fail } from "@/lib/apiResponse";
@@ -13,7 +14,7 @@ const legacyResolveSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = legacyResolveSchema.parse(await request.json());
+    const payload = legacyResolveSchema.parse(await safeRequestJson(request, "app/api/legacy/resolve/route.ts"));
     return ok(await resolveLegacyFallback(payload));
   } catch (error) {
     return fail(error);

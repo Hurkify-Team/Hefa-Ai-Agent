@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -16,7 +17,7 @@ const signupSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = signupSchema.parse(await request.json());
+    const payload = signupSchema.parse(await safeRequestJson(request, "app/api/auth/signup/route.ts"));
     const user = createAuthUser(payload);
     const response = ok({
       authenticated: true,

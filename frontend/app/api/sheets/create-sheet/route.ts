@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { ok, fail } from "@/lib/apiResponse";
 import { logAuditEntry } from "@/lib/auditLog";
 import { createNewCategorySheet } from "@/lib/googleSheets";
@@ -8,7 +9,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const payload = createCategorySchema.parse(await request.json());
+    const payload = createCategorySchema.parse(await safeRequestJson(request, "app/api/sheets/create-sheet/route.ts"));
     const result = await createNewCategorySheet(payload);
     clearWorkbookSourceCache("active");
 

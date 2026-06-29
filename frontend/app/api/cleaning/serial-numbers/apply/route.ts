@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -14,7 +15,7 @@ const serialNumberApplySchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = serialNumberApplySchema.parse(await request.json().catch(() => ({})));
+    const payload = serialNumberApplySchema.parse(await safeRequestJson(request, "app/api/cleaning/serial-numbers/apply/route.ts", {}));
     const result = await applySerialNumberFixes({ category: payload.category });
     clearWorkbookSourceCache("active");
 

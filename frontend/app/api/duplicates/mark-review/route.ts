@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -15,7 +16,7 @@ const markDuplicateReviewSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = markDuplicateReviewSchema.parse(await request.json());
+    const payload = markDuplicateReviewSchema.parse(await safeRequestJson(request, "app/api/duplicates/mark-review/route.ts"));
     const result = await markDuplicateGroupForReview({ groupId: payload.groupId, category: payload.category });
     clearWorkbookSourceCache("active");
 

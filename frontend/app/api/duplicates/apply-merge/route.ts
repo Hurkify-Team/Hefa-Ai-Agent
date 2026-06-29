@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -18,7 +19,7 @@ const applyMergeSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = applyMergeSchema.parse(await request.json());
+    const payload = applyMergeSchema.parse(await safeRequestJson(request, "app/api/duplicates/apply-merge/route.ts"));
     const result = await applyDuplicateMerge(payload);
     clearWorkbookSourceCache("active");
 

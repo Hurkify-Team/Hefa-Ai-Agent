@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -66,7 +67,7 @@ type GeminiTestResult = {
 
 async function fetchApi<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/settings/page.tsx"));
 
   if (!payload.ok) {
     throw new Error(payload.error);
@@ -130,7 +131,7 @@ export default function SettingsPage() {
 
     try {
       const response = await fetch("/api/test-gemini", { cache: "no-store" });
-      setGeminiResult((await response.json()) as GeminiTestResult);
+      setGeminiResult((await safeJsonResponse<GeminiTestResult>(response, "app/settings/page.tsx")));
     } catch (error) {
       setGeminiResult({
         success: false,
@@ -150,7 +151,7 @@ export default function SettingsPage() {
         method: "POST",
         cache: "no-store",
       });
-      const payload = (await response.json()) as ApiResult<{ cleared: boolean; clearedAt: string }>;
+      const payload = await safeJsonResponse<ApiResult<{ cleared: boolean; clearedAt: string }>>(response, "app/settings/page.tsx");
 
       if (!payload.ok) {
         throw new Error(payload.error);

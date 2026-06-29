@@ -1,3 +1,5 @@
+import { safeJsonResponse } from "@/lib/safeJson";
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -193,7 +195,7 @@ function extractHefNoQuery(question: string) {
 async function callInternalApi<T>(requestUrl: string, path: string, init?: RequestInit): Promise<T> {
   const url = new URL(path, requestUrl);
   const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = await response.json() as { ok: boolean; data?: T; error?: string };
+  const payload = await safeJsonResponse<{ ok: boolean; data?: T; error?: string }>(response, "app/api/ai/ask-agent/route.ts");
   if (!payload.ok) throw new Error(payload.error || "Internal source returned an error.");
   return payload.data as T;
 }
@@ -351,7 +353,7 @@ function sourceFromKnowledge(source: "google_sheet" | "portal_cache"): AgentSour
 
 export async function POST(request: Request) {
   try {
-    const payload = askAgentSchema.parse(await request.json());
+    const payload = askAgentSchema.parse(await safeRequestJson(request, "app/api/ai/ask-agent/route.ts"));
     const requestedSources = payload.sources?.length ? payload.sources : ["portal", "sheets"] as AgentSource[];
 
     if (isHefNoQuestion(payload.question)) {

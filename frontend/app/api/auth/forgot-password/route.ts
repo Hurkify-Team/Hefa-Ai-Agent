@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -11,7 +12,7 @@ const forgotPasswordSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = forgotPasswordSchema.parse(await request.json());
+    const payload = forgotPasswordSchema.parse(await safeRequestJson(request, "app/api/auth/forgot-password/route.ts"));
     const reset = createPasswordResetToken(payload.email);
     return ok({
       email: reset.email,

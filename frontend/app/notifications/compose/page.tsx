@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { FormEvent, useMemo, useState } from "react";
 import { Loader2, MailCheck, Send, Smartphone, UsersRound } from "lucide-react";
 
@@ -23,7 +24,7 @@ const notificationTypes: Array<{ label: string; value: NotificationType }> = [
 
 async function fetchJson<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = await response.json() as ApiResult<T>;
+  const payload = await safeJsonResponse<ApiResult<T>>(response, "app/notifications/compose/page.tsx");
   if (!payload.ok) throw new Error(payload.error);
   return payload.data;
 }

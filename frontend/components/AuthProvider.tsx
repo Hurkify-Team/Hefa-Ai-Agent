@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -28,7 +29,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 async function readSession(): Promise<SessionPayload> {
   const response = await fetch("/api/auth/session", { cache: "no-store" });
-  const payload = await response.json();
+  const payload = await safeJsonResponse<Record<string, any>>(response, "components/AuthProvider.tsx");
   return payload.data ?? { authenticated: false, permissions: [], routeAccess: [] };
 }
 

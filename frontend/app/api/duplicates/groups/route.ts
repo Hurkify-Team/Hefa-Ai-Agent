@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -12,7 +13,7 @@ const duplicateGroupsSchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = duplicateGroupsSchema.parse(await request.json().catch(() => ({})));
+    const payload = duplicateGroupsSchema.parse(await safeRequestJson(request, "app/api/duplicates/groups/route.ts", {}));
     return ok(await analyzeDuplicateGroups(payload));
   } catch (error) {
     return fail(error);

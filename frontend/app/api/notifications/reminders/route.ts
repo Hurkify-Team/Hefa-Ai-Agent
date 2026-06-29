@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { fail, ok } from "@/lib/apiResponse";
 import { MAX_NOTIFICATION_RECIPIENTS, listNotificationStatusFacilities, runDailyNotificationScan } from "@/lib/notificationEngine";
 
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const payload = await request.json().catch(() => ({}));
+    const payload = await safeRequestJson(request, "app/api/notifications/reminders/route.ts", {});
     return ok(await runDailyNotificationScan({ channels: ["email", "sms"], limit: MAX_NOTIFICATION_RECIPIENTS, ...payload }));
   } catch (error) {
     return fail(error);

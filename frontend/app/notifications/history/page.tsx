@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { useEffect, useState } from "react";
 import { FileText, Loader2, RefreshCcw } from "lucide-react";
 
@@ -10,7 +11,7 @@ type NotificationLog = { category: string; channel: string; created_at: string; 
 
 async function fetchJson<T>(url: string) {
   const response = await fetch(url, { cache: "no-store" });
-  const payload = await response.json() as ApiResult<T>;
+  const payload = await safeJsonResponse<ApiResult<T>>(response, "app/notifications/history/page.tsx");
   if (!payload.ok) throw new Error(payload.error);
   return payload.data;
 }

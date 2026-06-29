@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -14,7 +15,7 @@ const phoneNormalizationApplySchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    const payload = phoneNormalizationApplySchema.parse(await request.json().catch(() => ({})));
+    const payload = phoneNormalizationApplySchema.parse(await safeRequestJson(request, "app/api/cleaning/phone-normalization/apply/route.ts", {}));
     const result = await applyPhoneNormalizationFixes({ category: payload.category });
     clearWorkbookSourceCache("active");
 

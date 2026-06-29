@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { useEffect, useState } from "react";
 import { ExternalLink, FileText } from "lucide-react";
 
@@ -18,7 +19,7 @@ type AuditEntry = {
 
 async function fetchApi<T>(url: string) {
   const response = await fetch(url, { cache: "no-store" });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "components/RecentActivitiesCard.tsx"));
 
   if (!payload.ok) {
     throw new Error(payload.error);

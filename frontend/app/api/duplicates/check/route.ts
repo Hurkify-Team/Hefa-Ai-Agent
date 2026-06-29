@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { ok, fail } from "@/lib/apiResponse";
 import { logAuditEntry } from "@/lib/auditLog";
 import { checkDuplicateFacility } from "@/lib/duplicateChecker";
@@ -8,7 +9,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const payload = duplicateCheckSchema.parse(await request.json());
+    const payload = duplicateCheckSchema.parse(await safeRequestJson(request, "app/api/duplicates/check/route.ts"));
     const records = await readExistingRecords(payload.category);
     const result = checkDuplicateFacility(payload.values, records.rows);
 

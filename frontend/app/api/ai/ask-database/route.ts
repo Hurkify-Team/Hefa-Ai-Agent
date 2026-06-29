@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { ok, fail } from "@/lib/apiResponse";
 import { logAuditEntry } from "@/lib/auditLog";
 import { answerGlobalFacilityTotalQuestion, isGlobalFacilityTotalQuestion } from "@/lib/fastFacilitySummary";
@@ -19,7 +20,7 @@ function toSheetRows(rows: Array<Record<string, unknown>> | undefined): SheetRow
 
 export async function POST(request: Request) {
   try {
-    const payload = askDatabaseSchema.parse(await request.json());
+    const payload = askDatabaseSchema.parse(await safeRequestJson(request, "app/api/ai/ask-database/route.ts"));
     const result = isGlobalFacilityTotalQuestion(payload.question)
       ? (() => {
         const fast = answerGlobalFacilityTotalQuestion(payload.question);

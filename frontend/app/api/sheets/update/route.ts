@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { ok, fail } from "@/lib/apiResponse";
 import { logAuditEntry } from "@/lib/auditLog";
 import { updateExistingFacilityRow } from "@/lib/googleSheets";
@@ -8,7 +9,7 @@ export const runtime = "nodejs";
 
 export async function POST(request: Request) {
   try {
-    const payload = updateRowSchema.parse(await request.json());
+    const payload = updateRowSchema.parse(await safeRequestJson(request, "app/api/sheets/update/route.ts"));
     const result = await updateExistingFacilityRow(
       payload.category,
       payload.rowIndex,

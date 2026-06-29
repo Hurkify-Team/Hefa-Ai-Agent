@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { ok, fail } from "@/lib/apiResponse";
 import { startPortalFacilityScan } from "@/lib/playwrightPortal";
+import { safeRequestJson } from "@/lib/safeJson";
 
 export const runtime = "nodejs";
 
@@ -10,9 +11,8 @@ const scanSchema = z.object({
 });
 
 async function readPayload(request: Request) {
-  const raw = await request.text();
-  if (!raw.trim()) return { mode: "quick" as const };
-  return scanSchema.parse(JSON.parse(raw));
+  const body = await safeRequestJson(request, "app/api/portal/scan/route.ts", {});
+  return scanSchema.parse(body);
 }
 
 export async function POST(request: Request) {

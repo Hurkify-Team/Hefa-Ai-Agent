@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { BarChart3, CheckCircle2, Clock3, Inbox, Loader2, MailCheck, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
@@ -35,7 +36,7 @@ type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
 
 async function fetchJson<T>(url: string) {
   const response = await fetch(url, { cache: "no-store" });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/gmail-intelligence/page.tsx"));
   if (!payload.ok) throw new Error(payload.error);
   return payload.data;
 }

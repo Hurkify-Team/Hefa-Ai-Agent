@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { AlertTriangle, CheckCircle2, Globe2, Loader2, RefreshCw, Save, Search, ShieldCheck } from "lucide-react";
@@ -36,7 +37,7 @@ const defaultPreferences: PortalPreferences = {
 
 async function fetchApi<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/portal-settings/page.tsx"));
   if (!payload.ok) throw new Error(payload.error);
   return payload.data;
 }

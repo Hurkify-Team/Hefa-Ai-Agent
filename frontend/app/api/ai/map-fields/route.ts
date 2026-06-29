@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { ok, fail } from "@/lib/apiResponse";
 import { mapPortalTextToSheetHeaders } from "@/lib/geminiMapper";
 import { readExistingRecords, readSheetHeaders } from "@/lib/googleSheets";
@@ -14,7 +15,7 @@ type PartialMapFieldsBody = {
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as PartialMapFieldsBody;
+    const body = (await safeRequestJson(request, "app/api/ai/map-fields/route.ts")) as PartialMapFieldsBody;
     const category = body.category;
 
     if (category && !body.headers) {

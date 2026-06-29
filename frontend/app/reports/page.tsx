@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, BarChart3, FileWarning, Loader2, MapPin, Rows3 } from "lucide-react";
 
@@ -32,7 +33,7 @@ type WorkbookReportSummary = {
 
 async function fetchApi<T>(url: string) {
   const response = await fetch(url, { cache: "no-store" });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/reports/page.tsx"));
 
   if (!payload.ok) {
     throw new Error(payload.error);

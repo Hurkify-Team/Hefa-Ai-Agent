@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -107,7 +108,7 @@ type ApplyDuplicateMergeResult = {
 
 async function fetchApi<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/duplicate-checker/page.tsx"));
 
   if (!payload.ok) {
     throw new Error(payload.error);

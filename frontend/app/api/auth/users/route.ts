@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
   try {
     const actor = requireCurrentUserFromRequest(request);
     if (!canManageUsers(actor.role)) throw new Error("You do not have permission to manage users.");
-    const payload = createUserSchema.parse(await request.json());
+    const payload = createUserSchema.parse(await safeRequestJson(request, "app/api/auth/users/route.ts"));
     const user = createAuthUser({ ...payload, status: "active" });
     return ok({ user, users: listAuthUsers() }, 201);
   } catch (error) {
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const actor = requireCurrentUserFromRequest(request);
-    const payload = patchUserSchema.parse(await request.json());
+    const payload = patchUserSchema.parse(await safeRequestJson(request, "app/api/auth/users/route.ts"));
     const user = updateAuthUser(actor, payload.id, payload);
     return ok({ user, users: listAuthUsers() });
   } catch (error) {
@@ -63,7 +64,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const actor = requireCurrentUserFromRequest(request);
-    const payload = deleteUserSchema.parse(await request.json());
+    const payload = deleteUserSchema.parse(await safeRequestJson(request, "app/api/auth/users/route.ts"));
     deleteAuthUser(actor, payload.id);
     return ok({ users: listAuthUsers() });
   } catch (error) {

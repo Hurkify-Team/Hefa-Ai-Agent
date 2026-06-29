@@ -1,3 +1,4 @@
+import { safeRequestJson } from "@/lib/safeJson";
 import { ok, fail } from "@/lib/apiResponse";
 import { logAuditEntry } from "@/lib/auditLog";
 import { addNewFacilityRow, prepareNewFacilityRow } from "@/lib/googleSheets";
@@ -31,7 +32,7 @@ function facilityNameFromRow(values: SheetRow) {
 
 export async function POST(request: Request) {
   try {
-    const payload = appendRowSchema.parse(await request.json());
+    const payload = appendRowSchema.parse(await safeRequestJson(request, "app/api/sheets/append/route.ts"));
     const prepared = await prepareNewFacilityRow(payload.category, payload.values);
     const facilityName = facilityNameFromRow(prepared.row);
 

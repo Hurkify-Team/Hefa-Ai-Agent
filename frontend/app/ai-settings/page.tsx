@@ -1,5 +1,6 @@
 "use client";
 
+import { safeJsonResponse } from "@/lib/safeJson";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Bot, CheckCircle2, FileText, Loader2, Save, SlidersHorizontal, Zap } from "lucide-react";
@@ -35,7 +36,7 @@ const defaultPreferences: AiPreferences = {
 
 async function fetchApi<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = (await response.json()) as ApiResult<T>;
+  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/ai-settings/page.tsx"));
   if (!payload.ok) throw new Error(payload.error);
   return payload.data;
 }
@@ -93,7 +94,7 @@ export default function AiSettingsPage() {
     setGeminiResult(null);
     try {
       const response = await fetch("/api/test-gemini", { cache: "no-store" });
-      setGeminiResult((await response.json()) as GeminiTestResult);
+      setGeminiResult((await safeJsonResponse<GeminiTestResult>(response, "app/ai-settings/page.tsx")));
     } catch (testError) {
       setGeminiResult({ success: false, error: testError instanceof Error ? testError.message : "Unable to test Gemini" });
     } finally {
