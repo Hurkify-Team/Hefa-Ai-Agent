@@ -25,6 +25,8 @@ export async function POST(request: Request) {
     setAuthSessionCookie(response, user);
     return response;
   } catch (error) {
-    return fail(error, 401);
+    console.error("[/api/auth/signin] Sign-in failed", error);
+    const message = error instanceof Error ? error.message : "Sign-in failed";
+    return fail(error, message.includes("Production auth is not initialized") ? 500 : 401);
   }
 }

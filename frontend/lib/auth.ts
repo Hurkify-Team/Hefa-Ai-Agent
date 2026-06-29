@@ -4,7 +4,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { NextResponse } from "next/server";
 
 import { canManageUsers } from "@/lib/authAccess";
-import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile, ensureRuntimeJsonFile } from "@/lib/runtimeData";
 import type { AuthSessionPayload, AuthUser, StoredAuthUser, TeamRole, TeamStatus } from "@/types/auth";
 
 export const authCookieName = "hefamaa_session";
@@ -74,6 +74,72 @@ function writePasswordResetTokens(tokens: StoredPasswordReset[]) {
 
 function normalizeEmail(email: string) {
   return email.trim().toLowerCase();
+}
+
+function adminEnvConfig() {
+  const email = process.env.HEFAI_ADMIN_EMAIL?.trim();
+  const password = process.env.HEFAI_ADMIN_PASSWORD?.trim();
+  const name = process.env.HEFAI_ADMIN_NAME?.trim() || "HEFAI Super User";
+  const missing = [
+    ["HEFAI_ADMIN_EMAIL", email],
+    ["HEFAI_ADMIN_PASSWORD", password],
+  ]
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  return { email, missing, name, password };
+}
+
+export function initializeAuthStorage() {
+  const usersPath = authUsersPath();
+  const resetsPath = passwordResetTokensPath();
+  ensureRuntimeJsonFile<StoredAuthUser[]>(usersPath, []);
+  ensureRuntimeJsonFile<StoredPasswordReset[]>(resetsPath, []);
+
+  const users = readJsonFile<StoredAuthUser[]>(usersPath, []);
+  if (users.length > 0) {
+    console.info("[auth] Auth storage ready", { users: users.length, usersPath });
+    return { authReady: true, createdAdmin: false, missingEnv: [] as string[], users: users.length };
+  }
+
+  const admin = adminEnvConfig();
+  if (admin.missing.length > 0 || !admin.email || !admin.password) {
+    console.error("[auth] Auth storage has no users and admin env is incomplete", { missingEnv: admin.missing, usersPath });
+    return { authReady: false, createdAdmin: false, missingEnv: admin.missing, users: 0 };
+  }
+
+  if (admin.password.length < 8) {
+    console.error("[auth] HEFAI_ADMIN_PASSWORD is too short", { usersPath });
+    return { authReady: false, createdAdmin: false, missingEnv: ["HEFAI_ADMIN_PASSWORD_MIN_8"], users: 0 };
+  }
+
+  const now = new Date().toISOString();
+  const { hash, salt } = hashPassword(admin.password);
+  const user: StoredAuthUser = {
+    createdAt: now,
+    department: "Super Administration",
+    email: normalizeEmail(admin.email),
+    id: "usr_" + randomBytes(8).toString("hex"),
+    lastActive: "Created from production env",
+    name: admin.name,
+    passwordHash: hash,
+    passwordIterations,
+    passwordSalt: salt,
+    role: "Super User",
+    status: "active",
+  };
+
+  writeJsonFile(usersPath, [user]);
+  console.info("[auth] Created default HEFAI admin user from env", { email: user.email, usersPath });
+  return { authReady: true, createdAdmin: true, missingEnv: [] as string[], users: 1 };
+}
+
+function requireAuthStorageReady() {
+  const status = initializeAuthStorage();
+  if (!status.authReady) {
+    throw new Error("Production auth is not initialized. Set HEFAI_ADMIN_EMAIL and HEFAI_ADMIN_PASSWORD in Render, then restart the service.");
+  }
+  return status;
 }
 
 function publicUser(user: StoredAuthUser): AuthUser {
@@ -151,10 +217,12 @@ function parseCookieHeader(cookieHeader: string | null) {
 }
 
 export function listAuthUsers() {
+  requireAuthStorageReady();
   return readStoredUsers().map(publicUser);
 }
 
 export function createAuthUser(input: CreateUserInput) {
+  initializeAuthStorage();
   const users = readStoredUsers();
   const email = normalizeEmail(input.email);
   if (!email || !input.name.trim()) throw new Error("Name and email are required.");
@@ -234,6 +302,7 @@ export function resetAuthUserPassword(email: string, token: string, password: st
 }
 
 export function authenticateAuthUser(email: string, password: string) {
+  requireAuthStorageReady();
   const users = readStoredUsers();
   const normalizedEmail = normalizeEmail(email);
   const user = users.find((candidate) => candidate.email === normalizedEmail);
