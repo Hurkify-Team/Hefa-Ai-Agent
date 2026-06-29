@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { fail, ok } from "@/lib/apiResponse";
+import { logMemory } from "@/lib/memory";
 import { filterPortalFacilityRecords } from "@/lib/portalIntelligence";
 
 export const runtime = "nodejs";
@@ -10,7 +11,7 @@ const searchSchema = z.object({
   category: z.string().trim().optional(),
   facilityType: z.string().trim().optional(),
   lga: z.string().trim().optional(),
-  limit: z.coerce.number().int().min(1).max(5000).default(50),
+  limit: z.coerce.number().int().min(1).max(500).default(50),
   query: z.string().trim().optional(),
   status: z.string().trim().optional(),
   year: z.coerce.number().int().min(2000).max(2200).optional(),
@@ -18,6 +19,7 @@ const searchSchema = z.object({
 
 export async function GET(request: Request) {
   try {
+    logMemory("/api/portal/records start");
     const url = new URL(request.url);
     const params = searchSchema.parse({
       applicationType: url.searchParams.get("applicationType") || undefined,
@@ -31,6 +33,7 @@ export async function GET(request: Request) {
     });
     const result = filterPortalFacilityRecords(params);
 
+    logMemory("/api/portal/records end");
     return ok({
       cachedFacilities: result.allRecords.length,
       matchCount: result.totalMatches,

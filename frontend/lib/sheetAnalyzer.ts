@@ -72,6 +72,25 @@ export type WorkbookReportSummary = {
   };
 };
 
+
+function dashboardSummaryMaxRows() {
+  const value = Number(process.env.DASHBOARD_SUMMARY_MAX_ROWS ?? 500);
+  return Number.isFinite(value) && value > 0 ? value : 500;
+}
+
+function limitSummarySheets(sheets: Record<string, { headers: string[]; rows: SheetRow[] }>) {
+  const maxRows = dashboardSummaryMaxRows();
+  return Object.fromEntries(
+    Object.entries(sheets).map(([category, sheet]) => [
+      category,
+      {
+        headers: sheet.headers,
+        rows: sheet.rows.slice(0, maxRows),
+      },
+    ]),
+  );
+}
+
 function rowHasMissingContact(row: SheetRow) {
   return !valueFor(row, FIELD_ALIASES.contact);
 }
@@ -553,7 +572,7 @@ export async function lookupHefamaaNumberAcrossSources(input: SearchFacilitiesIn
 }
 
 export async function buildWorkbookReportSummary(): Promise<WorkbookReportSummary> {
-  const sheets = await getSourceAllSheetData("active");
+  const sheets = limitSummarySheets(await getSourceAllSheetData("active"));
   const categorySummary = Object.entries(sheets)
     .map(([category, sheet]) => ({
       category,

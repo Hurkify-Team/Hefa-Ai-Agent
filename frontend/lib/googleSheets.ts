@@ -805,20 +805,16 @@ function readOfficeRows(worksheet: ExcelJS.Worksheet, headerCells: SheetHeaderCe
 async function readNativeSheetTabs(): Promise<SheetTab[]> {
   const sheets = await getNativeSpreadsheetMetadata();
 
-  return Promise.all(
-    sheets.map(async (sheet) => {
-      const title = sheet.properties?.title ?? "";
-      const values = title ? await readNativeValues(`${quoteSheetName(title)}!1:1`) : [];
-      const headers = (values[0] ?? []).filter((value) => String(value).trim());
-      const rowCount = Math.max(0, Number(sheet.properties?.gridProperties?.rowCount ?? 0) - 1);
+  return sheets.map((sheet) => {
+    const title = sheet.properties?.title ?? "";
+    const rowCount = Math.max(0, Number(sheet.properties?.gridProperties?.rowCount ?? 0) - 1);
 
-      return {
-        title,
-        rowCount,
-        headerCount: headers.length,
-      };
-    }),
-  );
+    return {
+      title,
+      rowCount,
+      headerCount: 0,
+    };
+  });
 }
 
 async function readOfficeSheetTabs(document: SpreadsheetDocument): Promise<SheetTab[]> {
@@ -839,7 +835,13 @@ async function readSheetTabsUncached(): Promise<SheetTab[]> {
   const document = await getSpreadsheetDocument();
 
   if (document.kind === "xlsx") {
-    return readOfficeSheetTabs(document);
+    return [
+      {
+        title: document.name,
+        rowCount: 0,
+        headerCount: 0,
+      },
+    ];
   }
 
   return readNativeSheetTabs();

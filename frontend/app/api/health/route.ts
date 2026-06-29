@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { initializeAuthStorage } from "@/lib/auth";
 import { listAuditEntries } from "@/lib/auditLog";
 import { assertGoogleSheetsConfigured, readSheetTabs } from "@/lib/googleSheets";
+import { memorySnapshot } from "@/lib/memory";
 import { runtimeDataStatus } from "@/lib/runtimeData";
 
 export const runtime = "nodejs";
@@ -71,12 +72,26 @@ export async function GET() {
   if (!checks.playwright) errors.playwright = "HEFAMAA_PORTAL_URL is not configured";
 
   const success = Object.values(checks).every(Boolean);
-  console.info("SUCCESS:", "/api/health completed", { success, checks });
+  const memory = memorySnapshot();
+  const services = {
+    googleSheetsConfigured: checks.googleSheets,
+    geminiConfigured: checks.gemini,
+    portalConfigured: checks.playwright,
+    storageReady: checks.storage,
+  };
+  console.info("SUCCESS:", "/api/health completed", { success, checks, memory });
 
   return NextResponse.json(
     {
       success,
+      status: success ? "healthy" : "degraded",
       environment: process.env.NODE_ENV || "development",
+      memory: {
+        heapUsedMB: memory.heapUsedMB,
+        heapTotalMB: memory.heapTotalMB,
+        rssMB: memory.rssMB,
+      },
+      services,
       checks,
       errors,
       googleSheetsReady: checks.googleSheets,

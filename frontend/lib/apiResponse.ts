@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
+
+import { logMemory } from "@/lib/memory";
 import { ZodError } from "zod";
+
+
+function shouldLogMemory(route: string) {
+  return ["/api/reports", "/api/sheets", "/api/portal", "/api/notifications", "/api/ask-hefai", "/api/ai"].some((prefix) =>
+    route.startsWith(prefix),
+  );
+}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected error";
@@ -61,12 +70,15 @@ export function fail(error: unknown, status = 400) {
 
 export async function safeApi<T>(route: string, handler: () => Promise<Response | T> | Response | T, status = 500) {
   console.info("START:", route);
+  if (shouldLogMemory(route)) logMemory(route + " start");
 
   try {
     const result = await handler();
+    if (shouldLogMemory(route)) logMemory(route + " completed");
     console.info("SUCCESS:", route + " completed");
     return result instanceof Response ? result : ok(result);
   } catch (error) {
+    if (shouldLogMemory(route)) logMemory(route + " failed");
     console.error("ERROR:", route + " failed", error instanceof Error ? { message: error.message, stack: error.stack } : error);
     return fail(error, status);
   }

@@ -1,6 +1,6 @@
 "use client";
 
-import { safeJsonResponse } from "@/lib/safeJson";
+import { safeFetchJson } from "@/lib/safeFetchJson";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Activity,
@@ -49,23 +49,19 @@ type WorkbookReportSummary = {
 };
 
 async function fetchApi<T>(url: string, init?: RequestInit) {
-  try {
-    const response = await fetch(url, { cache: "no-store", ...init });
-    const payload = await safeJsonResponse<ApiResult<T>>(response, "app/dashboard/page.tsx " + url);
+  const result = await safeFetchJson<ApiResult<T>>(url, init);
 
-    if (!payload.ok) {
-      throw new Error(payload.error);
-    }
-
-    return payload.data;
-  } catch (error) {
-    console.error("[dashboard] API request failed", { endpoint: url, error });
-    const message = error instanceof Error ? error.message : "Dashboard API request failed";
-    if (message.includes("HTTP 502") || message.includes("502")) {
-      throw new Error("Dashboard service is temporarily unavailable. Render returned HTTP 502 for " + url + ". Check /api/health and server logs.");
-    }
-    throw error;
+  if (!result.ok) {
+    console.error("[dashboard] API request failed", { endpoint: url, error: result.error, status: result.status, raw: result.raw });
+    throw new Error(result.status === 502 ? "Service temporarily unavailable" : result.error);
   }
+
+  const payload = result.data;
+  if (!payload.ok) {
+    throw new Error(payload.error);
+  }
+
+  return payload.data;
 }
 
 function formatNumber(value: number) {

@@ -1,17 +1,21 @@
 import { safeApi } from "@/lib/apiResponse";
-import { assertGoogleSheetsConfigured } from "@/lib/googleSheets";
-import { buildWorkbookReportSummary } from "@/lib/sheetAnalyzer";
+import { defaultReportCache, readReportCache } from "@/lib/reportCache";
+import { logMemory } from "@/lib/memory";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   return safeApi("/api/reports/summary", async () => {
-    assertGoogleSheetsConfigured();
-    const summary = await buildWorkbookReportSummary();
-    console.info("[/api/reports/summary] Dashboard summary generated", {
-      totalFacilities: summary.totalFacilities,
-      totalCategories: summary.totalCategories,
-    });
-    return summary;
+    logMemory("/api/reports/summary start");
+    const cached = readReportCache() ?? defaultReportCache();
+    logMemory("/api/reports/summary end");
+    return {
+      ...cached.summary,
+      cache: {
+        expiresAt: cached.expiresAt,
+        generatedAt: cached.generatedAt,
+        source: cached.source,
+      },
+    };
   });
 }
