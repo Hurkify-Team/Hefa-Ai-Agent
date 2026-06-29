@@ -8,6 +8,7 @@
     "start": "next start"
   },
   "dependencies": {
+    "@tailwindcss/postcss": "^4.3.1",
     "@types/nodemailer": "^8.0.1",
     "exceljs": "^4.4.0",
     "googleapis": "^172.0.0",
@@ -15,16 +16,16 @@
     "next": "latest",
     "nodemailer": "^8.0.11",
     "playwright": "^1.60.0",
+    "postcss": "^8.5.16",
     "react": "latest",
     "react-dom": "latest",
+    "tailwindcss": "^4.3.1",
     "zod": "latest"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "latest",
     "@types/node": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "tailwindcss": "latest",
     "typescript": "latest"
   }
 }
