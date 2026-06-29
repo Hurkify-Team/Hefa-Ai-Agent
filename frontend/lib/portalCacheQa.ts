@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
 import {
   readPortalDetailsCacheLightweight,
@@ -196,8 +197,7 @@ function normalizeLoose(value: unknown) {
 }
 
 function localCachePath(envName: string, fallback: string) {
-  const configured = process.env[envName]?.trim() || fallback;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile(envName, fallback);
 }
 
 function safeMtime(file: string) {
@@ -549,7 +549,7 @@ function buildPortalQaIndex(sourceMtimeMs: number): QaIndexedDetail[] {
 
   const file = qaIndexPath();
   try {
-    mkdirSync(path.dirname(file), { recursive: true });
+    ensureRuntimeDataDirForFile(file);
     writeFileSync(file, JSON.stringify({ generatedAt: new Date().toISOString(), records, sourceMtimeMs, version: QA_INDEX_VERSION } satisfies PortalQaIndexFile));
   } catch {
     // If the index cannot be written, the in-memory records still make this request work.

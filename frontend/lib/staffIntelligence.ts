@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
 import { readPortalDetailsCacheLightweight, type LightweightPortalFacilityDetailRecord } from "@/lib/portalCacheStore";
 
@@ -50,8 +51,7 @@ type StaffIndexDiskCache = {
 let staffIndexMemoryCache: { records: StaffIndexRecord[]; sourceMtimeMs: number } | null = null;
 
 function dataPath(envName: string, fallback: string) {
-  const configured = process.env[envName]?.trim() || fallback;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile(envName, fallback);
 }
 
 function detailsCachePath() {
@@ -85,7 +85,7 @@ function readStaffIndexDiskCache(sourceMtimeMs: number) {
 function writeStaffIndexDiskCache(sourceMtimeMs: number, records: StaffIndexRecord[]) {
   const filePath = staffIndexCachePath();
   try {
-    mkdirSync(path.dirname(filePath), { recursive: true });
+    ensureRuntimeDataDirForFile(filePath);
     writeFileSync(filePath, JSON.stringify({ records, sourceMtimeMs, version: 1 }), "utf8");
   } catch {
     // Chat answers still work from memory if the local cache snapshot cannot be written.

@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 import type { AuditEntry } from "@/types/audit";
 
 type AuditDbRow = {
@@ -20,16 +20,16 @@ type AuditDbRow = {
 
 let auditDb: DatabaseSync | null = null;
 function resolveAuditDbPath() {
-  const databaseUrl = process.env.DATABASE_URL || "file:./data/audit.db";
-  const requestedFile = databaseUrl.startsWith("file:") ? databaseUrl.slice(5) : "audit.db";
-  const databaseFile = path.basename(requestedFile) || "audit.db";
-  return path.join(process.cwd(), "data", databaseFile);
+  const databaseUrl = process.env.DATABASE_URL || "file:audit.db";
+  const requestedFile = databaseUrl.startsWith("file:") ? databaseUrl.slice(5) : databaseUrl;
+  if (requestedFile && path.isAbsolute(requestedFile)) return requestedFile;
+  return configuredRuntimeFile("HEFAMAA_AUDIT_DB_PATH", path.basename(requestedFile) || "audit.db");
 }
 
 function getAuditDb() {
   if (!auditDb) {
     const dbPath = resolveAuditDbPath();
-    mkdirSync(path.dirname(dbPath), { recursive: true }); // Ensure directory exists
+    ensureRuntimeDataDirForFile(dbPath);
     auditDb = new DatabaseSync(dbPath);
     auditDb.exec(`
       CREATE TABLE IF NOT EXISTS audit_log (

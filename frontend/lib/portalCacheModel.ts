@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "fs";
-import path from "path";
+
+import { configuredRuntimeFile } from "@/lib/runtimeData";
 
 import {
   readPortalDetailsCacheLightweight,
@@ -80,8 +81,7 @@ function normalize(value: unknown) {
 }
 
 function localCachePath(envName: string, fallback: string) {
-  const configured = process.env[envName]?.trim() || fallback;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile(envName, fallback);
 }
 
 function safeMtime(file: string) {

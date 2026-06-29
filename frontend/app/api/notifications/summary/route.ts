@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
-import path from "node:path";
 
 import { fail, ok } from "@/lib/apiResponse";
+import { configuredRuntimeFile } from "@/lib/runtimeData";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -95,6 +95,13 @@ const DATA_FILES = {
   rules: "notification-rules.json",
 } as const;
 
+const DATA_FILE_ENVS: Record<keyof typeof DATA_FILES, string> = {
+  logs: "NOTIFICATION_LOGS_PATH",
+  portalCache: "HEFAMAA_PORTAL_CACHE",
+  qaIndex: "HEFAMAA_PORTAL_QA_INDEX",
+  rules: "NOTIFICATION_RULES_PATH",
+};
+
 const MONITORED_STATUS_LABELS: Record<Exclude<NotificationStatusKey, "RENEWAL_OVERDUE">, string> = {
   DOCUMENT_QUERIED: "Document Queried",
   FINAL_APPROVAL_PENDING: "Final Approval Pending",
@@ -111,16 +118,7 @@ const STATUS_RANK: Record<NotificationStatusKey, number> = {
 };
 
 function dataFile(name: keyof typeof DATA_FILES) {
-  switch (name) {
-    case "logs":
-      return path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "notification-logs.json");
-    case "portalCache":
-      return path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "portal-facilities-cache.json");
-    case "qaIndex":
-      return path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "portal-qa-index.json");
-    case "rules":
-      return path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "notification-rules.json");
-  }
+  return configuredRuntimeFile(DATA_FILE_ENVS[name], DATA_FILES[name]);
 }
 
 async function safeJson<T>(file: string, fallback: T): Promise<T> {

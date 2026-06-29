@@ -1,4 +1,8 @@
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+
 import { z } from "zod";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
 export const helpDeskTicketSchema = z.object({
   assignedUnit: z.string().optional().or(z.literal("")),
@@ -58,7 +62,9 @@ const UNIT_BY_CATEGORY: Record<string, string> = {
   "Public Enquiry": "Front Desk",
 };
 
-let memoryStore: HelpDeskStore | null = null;
+function helpDeskStorePath() {
+  return configuredRuntimeFile("HELPDESK_DATA_PATH", "help-desk-records.json");
+}
 
 function seedStore(): HelpDeskStore {
   return {
@@ -87,12 +93,22 @@ function seedStore(): HelpDeskStore {
 }
 
 function readStore(): HelpDeskStore {
-  if (!memoryStore) memoryStore = seedStore();
-  return { tickets: [...memoryStore.tickets] };
+  const file = helpDeskStorePath();
+  if (!existsSync(file)) return seedStore();
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as HelpDeskStore;
+    return { tickets: Array.isArray(parsed.tickets) ? parsed.tickets : seedStore().tickets };
+  } catch {
+    return seedStore();
+  }
 }
 
 function writeStore(store: HelpDeskStore) {
-  memoryStore = { tickets: [...store.tickets] };
+  const file = helpDeskStorePath();
+  ensureRuntimeDataDirForFile(file);
+  const tempPath = file + ".tmp";
+  writeFileSync(tempPath, JSON.stringify(store, null, 2));
+  renameSync(tempPath, file);
 }
 
 export function categorizeHelpDeskText(text: string) {

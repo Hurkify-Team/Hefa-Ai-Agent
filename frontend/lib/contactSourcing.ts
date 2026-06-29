@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
 import { compareFacilitySimilarity, normalizeEmail, normalizeFacilityName, normalizeHeaderName, normalizeLGA, normalizePhoneNumber } from "@/lib/normalizers";
 import { readPortalCacheRows, type PortalCacheRow } from "@/lib/portalCacheModel";
@@ -83,8 +84,7 @@ function normalized(value: unknown) {
 }
 
 function localCachePath(envName: string, fallback: string) {
-  const configured = process.env[envName]?.trim() || fallback;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile(envName, fallback);
 }
 
 function qaIndexPath() {
@@ -370,7 +370,7 @@ function applyFields(record: Record<string, unknown>, update: ContactSourceUpdat
 }
 
 function writeJson(file: string, value: unknown) {
-  mkdirSync(path.dirname(file), { recursive: true });
+  ensureRuntimeDataDirForFile(file);
   writeFileSync(file, JSON.stringify(value, null, 2), "utf8");
 }
 

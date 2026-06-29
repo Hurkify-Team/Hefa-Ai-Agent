@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 import { z } from "zod";
 
 import { buildPortalCacheFreshnessPlan } from "@/lib/portalCacheFreshness";
@@ -104,8 +105,7 @@ const STATUS_TEMPLATES: Record<Exclude<NotificationTemplate, "custom">, { subjec
 };
 
 function notificationStorePath() {
-  const configured = process.env.NOTIFICATION_OUTBOX_PATH?.trim() || "data/notification-outbox.json";
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile("NOTIFICATION_OUTBOX_PATH", "notification-outbox.json");
 }
 
 function readStore(): NotificationStore {
@@ -122,7 +122,7 @@ function readStore(): NotificationStore {
 
 function writeStore(store: NotificationStore) {
   const file = notificationStorePath();
-  mkdirSync(path.dirname(file), { recursive: true });
+  ensureRuntimeDataDirForFile(file);
   writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
 }
 

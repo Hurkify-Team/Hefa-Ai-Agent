@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
 import type { PortalFacilityRecord } from "@/lib/playwrightPortal";
 
@@ -36,8 +37,7 @@ export type PortalScanSnapshot = {
 const MAX_SNAPSHOTS = 60;
 
 function snapshotsPath() {
-  const configuredPath = process.env.HEFAMAA_PORTAL_SCAN_SNAPSHOTS?.trim() || "data/portal-scan-snapshots.json";
-  return path.isAbsolute(configuredPath) ? configuredPath : path.join(process.cwd(), configuredPath);
+  return configuredRuntimeFile("HEFAMAA_PORTAL_SCAN_SNAPSHOTS", "portal-scan-snapshots.json");
 }
 
 function normalizeKey(value: string) {
@@ -67,7 +67,7 @@ export function readPortalScanSnapshots(): PortalScanSnapshot[] {
 
 function writePortalScanSnapshots(snapshots: PortalScanSnapshot[]) {
   const file = snapshotsPath();
-  mkdirSync(path.dirname(file), { recursive: true });
+  ensureRuntimeDataDirForFile(file);
   const tempFile = file + ".tmp";
   writeFileSync(tempFile, JSON.stringify(snapshots.slice(-MAX_SNAPSHOTS), null, 2), "utf8");
   renameSync(tempFile, file);

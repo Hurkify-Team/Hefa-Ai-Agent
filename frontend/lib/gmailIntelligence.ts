@@ -1,3 +1,7 @@
+import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
+
 export type AgencyMailRecord = {
   category: string;
   from: string;
@@ -21,7 +25,9 @@ const MAIL_CATEGORY_RULES = [
   { category: "General Correspondence", keywords: ["letter", "request", "information", "meeting"] },
 ];
 
-let memoryStore: GmailStore | null = null;
+function gmailStorePath() {
+  return configuredRuntimeFile("GMAIL_DATA_PATH", "gmail-intelligence-records.json");
+}
 
 function seedStore(): GmailStore {
   return {
@@ -49,12 +55,22 @@ function seedStore(): GmailStore {
 }
 
 function readStore(): GmailStore {
-  if (!memoryStore) memoryStore = seedStore();
-  return { mailRecords: [...memoryStore.mailRecords] };
+  const file = gmailStorePath();
+  if (!existsSync(file)) return seedStore();
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as GmailStore;
+    return { mailRecords: Array.isArray(parsed.mailRecords) ? parsed.mailRecords : seedStore().mailRecords };
+  } catch {
+    return seedStore();
+  }
 }
 
 function writeStore(store: GmailStore) {
-  memoryStore = { mailRecords: [...store.mailRecords] };
+  const file = gmailStorePath();
+  ensureRuntimeDataDirForFile(file);
+  const tempPath = file + ".tmp";
+  writeFileSync(tempPath, JSON.stringify(store, null, 2));
+  renameSync(tempPath, file);
 }
 
 export function categorizeMailText(text: string) {

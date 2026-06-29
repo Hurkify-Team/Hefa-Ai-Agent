@@ -1,0 +1,101 @@
+services:
+  - type: web
+    name: hefamaa-smart-registry-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    disk:
+      name: hefamaa-data
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_TELEMETRY_DISABLED
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /ms-playwright
+      - key: HEFAMAA_DATA_DIR
+        value: /var/data/hefamaa
+      - key: DATABASE_URL
+        value: file:/var/data/hefamaa/audit.db
+      - key: HEFAMAA_AUDIT_DB_PATH
+        value: /var/data/hefamaa/audit.db
+      - key: HEFAMAA_PORTAL_URL
+        value: https://portal.hefamaaportal.com.ng/
+      - key: HEFAMAA_PORTAL_HEADLESS
+        value: "true"
+      - key: HEFAMAA_PORTAL_USE_BUNDLED_CHROMIUM
+        value: "true"
+      - key: HEFAMAA_PORTAL_KEEP_AWAKE
+        value: "false"
+      - key: HEFAMAA_AUTH_USERS_PATH
+        value: /var/data/hefamaa/auth-users.json
+      - key: HEFAMAA_AUTH_RESETS_PATH
+        value: /var/data/hefamaa/auth-password-resets.json
+      - key: HELPDESK_DATA_PATH
+        value: /var/data/hefamaa/help-desk-records.json
+      - key: GMAIL_DATA_PATH
+        value: /var/data/hefamaa/gmail-intelligence-records.json
+      - key: HEFAI_MEMORY_PATH
+        value: /var/data/hefamaa/conversation-memory.json
+      - key: NOTIFICATION_LOGS_PATH
+        value: /var/data/hefamaa/notification-logs.json
+      - key: NOTIFICATION_OUTBOX_PATH
+        value: /var/data/hefamaa/notification-outbox.json
+      - key: NOTIFICATION_DASHBOARD_CACHE_PATH
+        value: /var/data/hefamaa/notification-dashboard-cache.json
+      - key: NOTIFICATION_RULES_PATH
+        value: /var/data/hefamaa/notification-rules.json
+      - key: HEFAMAA_PORTAL_CACHE
+        value: /var/data/hefamaa/portal-facilities-cache.json
+      - key: HEFAMAA_PORTAL_FACILITIES_CACHE
+        value: /var/data/hefamaa/portal-facilities-cache.json
+      - key: HEFAMAA_PORTAL_DETAILS_CACHE
+        value: /var/data/hefamaa/portal-facility-details-cache.json
+      - key: HEFAMAA_PORTAL_QA_INDEX
+        value: /var/data/hefamaa/portal-qa-index.json
+      - key: HEFAMAA_PORTAL_STAFF_INDEX
+        value: /var/data/hefamaa/portal-staff-index.json
+      - key: HEFAMAA_PORTAL_SCAN_SNAPSHOTS
+        value: /var/data/hefamaa/portal-scan-snapshots.json
+      - key: HEFAMAA_PORTAL_STORAGE_STATE
+        value: /var/data/hefamaa/portal-storage-state.json
+      - key: HEFAMAA_PORTAL_PROFILE_DIR
+        value: /var/data/hefamaa/portal-profile
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: EMAIL_PROVIDER
+        value: auto
+      - key: TERMII_SENDER_ID
+        value: HEFAMAA
+      - key: AUTH_SESSION_SECRET
+        generateValue: true
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: OLD_GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_EMAIL
+        sync: false
+      - key: GOOGLE_PRIVATE_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: TERMII_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: NOTIFICATION_FROM_EMAIL
+        sync: false
+      - key: GMAIL_SMTP_USER
+        sync: false
+      - key: GMAIL_SMTP_APP_PASSWORD
+        sync: false
+      - key: GMAIL_SMTP_FROM
+        sync: false
+      - key: GMAIL_CLIENT_ID
+        sync: false
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false

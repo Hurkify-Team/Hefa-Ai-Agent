@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync, readFileSync, statSync, writeFileSync } from "fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 import { z } from "zod";
 
 import { sourceMissingPortalContacts } from "@/lib/contactSourcing";
@@ -250,13 +251,11 @@ const MONTHS: Record<string, number> = {
 };
 
 function storePath() {
-  const configured = process.env.NOTIFICATION_LOGS_PATH?.trim() || "data/notification-logs.json";
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile("NOTIFICATION_LOGS_PATH", "notification-logs.json");
 }
 
 function dataPath(envName: string, fallback: string) {
-  const configured = process.env[envName]?.trim() || fallback;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile(envName, fallback);
 }
 
 function fileMtimeMs(file: string) {
@@ -299,7 +298,7 @@ function readCompactDashboardCache(deps: ReturnType<typeof compactDashboardDeps>
 function writeCompactDashboardCache(deps: ReturnType<typeof compactDashboardDeps>, dashboard: unknown) {
   const file = compactDashboardCachePath();
   try {
-    mkdirSync(path.dirname(file), { recursive: true });
+    ensureRuntimeDataDirForFile(file);
     writeFileSync(file, JSON.stringify({ createdAtMs: Date.now(), dashboard, deps, version: 1 }), "utf8");
   } catch {
     // The in-memory dashboard cache still works if the file snapshot cannot be written.
@@ -322,7 +321,7 @@ function readStore(): NotificationStore {
 
 function writeStore(store: NotificationStore) {
   const file = storePath();
-  mkdirSync(path.dirname(file), { recursive: true });
+  ensureRuntimeDataDirForFile(file);
   writeFileSync(file, JSON.stringify({ logs: store.logs, verifications: store.verifications ?? [] }, null, 2), "utf8");
   invalidateNotificationCaches();
 }

@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Browser, BrowserContext, Page } from "playwright";
 
 import { writePortalScanSnapshot } from "@/lib/portalScanSnapshots";
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
 type PortalSession = {
   browser?: Browser | null;
@@ -473,7 +474,7 @@ async function stopPortalScanKeepAwake() {
 
 async function persistPortalStorageState(session: PortalSession) {
   const storageStatePath = session.storageStatePath ?? getPortalStorageStatePath();
-  mkdirSync(path.dirname(storageStatePath), { recursive: true });
+  ensureRuntimeDataDirForFile(storageStatePath);
   await session.context.storageState({ path: storageStatePath }).catch(() => undefined);
 }
 
@@ -538,13 +539,11 @@ async function verifyPortalHostResolves() {
 }
 
 function getPortalProfileDir() {
-  const configuredDir = process.env.HEFAMAA_PORTAL_PROFILE_DIR?.trim() || "data/portal-profile";
-  return path.isAbsolute(configuredDir) ? configuredDir : path.join(process.cwd(), configuredDir);
+  return configuredRuntimeFile("HEFAMAA_PORTAL_PROFILE_DIR", "portal-profile");
 }
 
 function getPortalStorageStatePath() {
-  const configuredPath = process.env.HEFAMAA_PORTAL_STORAGE_STATE?.trim() || "data/portal-storage-state.json";
-  return path.isAbsolute(configuredPath) ? configuredPath : path.join(process.cwd(), configuredPath);
+  return configuredRuntimeFile("HEFAMAA_PORTAL_STORAGE_STATE", "portal-storage-state.json");
 }
 
 function profileName(profileDir: string) {
@@ -569,10 +568,20 @@ function getPortalBrowserChannel() {
   return /^(bundled|playwright|chromium)$/i.test(configuredChannel) ? undefined : configuredChannel;
 }
 
+function shouldRunPortalHeadless() {
+  const configured = process.env.HEFAMAA_PORTAL_HEADLESS?.trim();
+  if (configured) return /^(1|true|yes)$/i.test(configured);
+
+  // Local staff still get a visible browser by default. Hosted Linux environments
+  // such as Render run without a desktop display, so the scanner must be headless.
+  return process.platform === "linux" && Boolean(process.env.RENDER);
+}
+
 function browserChannelLabel(channel: string | undefined | null) {
   if (channel) return channel;
   const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  if (existsSync(process.env.HEFAMAA_PORTAL_BROWSER_EXECUTABLE?.trim() || macChrome)) return "Google Chrome";
+  const executable = process.env.HEFAMAA_PORTAL_BROWSER_EXECUTABLE?.trim() || (process.env.NODE_ENV === "production" ? "" : macChrome);
+  if (executable && existsSync(/*turbopackIgnore: true*/ executable)) return "Google Chrome";
   return "bundled Playwright Chromium";
 }
 
@@ -589,7 +598,7 @@ function getPortalChromeExecutable(defaultExecutable: string) {
   if (forceBundled) return defaultExecutable;
 
   const macChrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-  return existsSync(macChrome) ? macChrome : defaultExecutable;
+  return process.env.NODE_ENV !== "production" && existsSync(/*turbopackIgnore: true*/ macChrome) ? macChrome : defaultExecutable;
 }
 
 async function portalDebuggingEndpointReady(port: number) {
@@ -613,7 +622,7 @@ async function waitForPortalDebuggingEndpoint(port: number, timeoutMs = 45_000) 
 }
 
 function getPortalProfileLock(profileDir = getPortalProfileDir()): PortalProfileLock {
-  const lockPath = path.join(profileDir, "SingletonLock");
+  const lockPath = path.join(/*turbopackIgnore: true*/ profileDir, "SingletonLock");
 
   try {
     const raw = readlinkSync(lockPath);
@@ -652,12 +661,12 @@ function isTimeoutError(error: unknown) {
 
 function clearPortalSingletonFiles(profileDir: string) {
   for (const lockFile of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) {
-    rmSync(path.join(profileDir, lockFile), { force: true });
+    rmSync(path.join(/*turbopackIgnore: true*/ profileDir, lockFile), { force: true });
   }
 }
 
 function hasPortalSingletonFiles(profileDir: string) {
-  return ["SingletonLock", "SingletonSocket", "SingletonCookie"].some((lockFile) => existsSync(path.join(profileDir, lockFile)));
+  return ["SingletonLock", "SingletonSocket", "SingletonCookie"].some((lockFile) => existsSync(path.join(/*turbopackIgnore: true*/ profileDir, lockFile)));
 }
 
 async function terminateChromeProcessesForProfile(profileDir: string) {
@@ -1002,7 +1011,7 @@ async function launchPersistentPortalContext(profileDir: string) {
   const storageStatePath = getPortalStorageStatePath();
   const debuggingPort = getPortalDebuggingPort();
   mkdirSync(profileDir, { recursive: true });
-  mkdirSync(path.dirname(storageStatePath), { recursive: true });
+  ensureRuntimeDataDirForFile(storageStatePath);
 
   async function connectToDedicatedBrowser(activeProfileDir = profileDir) {
     const browser = await chromium.connectOverCDP("http://127.0.0.1:" + debuggingPort, { timeout: 15_000 });
@@ -1024,6 +1033,7 @@ async function launchPersistentPortalContext(profileDir: string) {
       clearPortalSingletonFiles(activeProfileDir);
     }
 
+    const headless = shouldRunPortalHeadless();
     const launchOptions: Parameters<typeof chromium.launchPersistentContext>[1] = {
       acceptDownloads: true,
       args: [
@@ -1036,10 +1046,10 @@ async function launchPersistentPortalContext(profileDir: string) {
         "--ignore-certificate-errors",
         "--allow-insecure-localhost",
       ],
-      headless: false,
+      headless,
       ignoreHTTPSErrors: true,
       timeout: 60_000,
-      viewport: null,
+      viewport: headless ? { height: 900, width: 1440 } : null,
     };
 
     if (browserChannel) {
@@ -2181,8 +2191,7 @@ function countByFacilityType(records: PortalFacilityRecord[]) {
 }
 
 function portalFacilityCachePath() {
-  const configuredPath = process.env.HEFAMAA_PORTAL_FACILITIES_CACHE?.trim() || "data/portal-facilities-cache.json";
-  return path.isAbsolute(configuredPath) ? configuredPath : path.join(process.cwd(), configuredPath);
+  return configuredRuntimeFile("HEFAMAA_PORTAL_FACILITIES_CACHE", "portal-facilities-cache.json");
 }
 
 function readPortalFacilityCache(): PortalFacilityRecord[] {
@@ -2221,7 +2230,7 @@ function readPortalFacilityCache(): PortalFacilityRecord[] {
 
 function writePortalFacilityCache(records: PortalFacilityRecord[]) {
   const cachePath = portalFacilityCachePath();
-  mkdirSync(path.dirname(cachePath), { recursive: true });
+  ensureRuntimeDataDirForFile(cachePath);
   const tempPath = cachePath + ".tmp";
   writeFileSync(tempPath, JSON.stringify(records, null, 2), "utf8");
   renameSync(tempPath, cachePath);
@@ -2240,8 +2249,7 @@ const STAFF_COMPLEMENT_ALIASES: Record<string, string[]> = {
 };
 
 function portalFacilityDetailsCachePath() {
-  const configuredPath = process.env.HEFAMAA_PORTAL_DETAILS_CACHE?.trim() || "data/portal-facility-details-cache.json";
-  return path.isAbsolute(configuredPath) ? configuredPath : path.join(process.cwd(), configuredPath);
+  return configuredRuntimeFile("HEFAMAA_PORTAL_DETAILS_CACHE", "portal-facility-details-cache.json");
 }
 
 export function readPortalFacilityDetailsCache(): PortalFacilityDetailRecord[] {
@@ -2280,7 +2288,7 @@ export function readPortalFacilityDetailsCache(): PortalFacilityDetailRecord[] {
 
 function writePortalFacilityDetailsCache(records: PortalFacilityDetailRecord[]) {
   const cachePath = portalFacilityDetailsCachePath();
-  mkdirSync(path.dirname(cachePath), { recursive: true });
+  ensureRuntimeDataDirForFile(cachePath);
   const tempPath = cachePath + ".tmp";
   writeFileSync(tempPath, JSON.stringify(records, null, 2), "utf8");
   renameSync(tempPath, cachePath);

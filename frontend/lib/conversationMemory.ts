@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
 export type ConversationMemory = {
   lastCategory?: string | null;
@@ -17,8 +18,7 @@ const globalMemory = globalThis as typeof globalThis & { __hefaiConversationMemo
 globalMemory.__hefaiConversationMemory ??= {};
 
 function memoryPath() {
-  const configured = process.env.HEFAI_MEMORY_PATH?.trim() || "data/conversation-memory.json";
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile("HEFAI_MEMORY_PATH", "conversation-memory.json");
 }
 
 function readDiskStore(): MemoryStore {
@@ -34,7 +34,7 @@ function readDiskStore(): MemoryStore {
 
 function writeDiskStore(store: MemoryStore) {
   const file = memoryPath();
-  mkdirSync(path.dirname(file), { recursive: true });
+  ensureRuntimeDataDirForFile(file);
   writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
 }
 

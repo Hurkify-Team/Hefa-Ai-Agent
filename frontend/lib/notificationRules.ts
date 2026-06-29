@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import path from "path";
+import { existsSync, readFileSync, writeFileSync } from "fs";
+
+import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 import { z } from "zod";
 
 export const notificationRuleSchema = z.object({
@@ -41,8 +42,7 @@ const DEFAULT_RULES: NotificationRule[] = [
 ];
 
 function rulesPath() {
-  const configured = process.env.NOTIFICATION_RULES_PATH?.trim() || "data/notification-rules.json";
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile("NOTIFICATION_RULES_PATH", "notification-rules.json");
 }
 
 function readStore(): RuleStore {
@@ -58,7 +58,7 @@ function readStore(): RuleStore {
 
 function writeStore(store: RuleStore) {
   const file = rulesPath();
-  mkdirSync(path.dirname(file), { recursive: true });
+  ensureRuntimeDataDirForFile(file);
   writeFileSync(file, JSON.stringify(store, null, 2), "utf8");
 }
 

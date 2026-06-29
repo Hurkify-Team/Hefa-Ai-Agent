@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "fs";
-import path from "path";
+
+import { configuredRuntimeFile } from "@/lib/runtimeData";
 
 export type LightweightPortalFacilityRecord = {
   applicationType?: string;
@@ -46,8 +47,7 @@ let listCache: FileCache<LightweightPortalFacilityRecord[]> | null = null;
 let detailsCache: FileCache<LightweightPortalFacilityDetailRecord[]> | null = null;
 
 function cachePath(envName: string, fallback: string) {
-  const configured = process.env[envName]?.trim() || fallback;
-  return path.isAbsolute(configured) ? configured : path.join(process.cwd(), configured);
+  return configuredRuntimeFile(envName, fallback);
 }
 
 function fileMtime(file: string) {
