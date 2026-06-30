@@ -14,7 +14,12 @@ export type LightweightSheet = {
   title: string;
 };
 
-const READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly";
+const GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet";
+const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const READONLY_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets.readonly",
+  "https://www.googleapis.com/auth/drive.metadata.readonly",
+];
 const metadataFields = "sheets.properties.title,sheets.properties.sheetId,sheets.properties.index,sheets.properties.gridProperties.rowCount,properties.title";
 
 function envValue(name: string) {
@@ -54,19 +59,54 @@ function requiredEnv(name: string) {
   return value;
 }
 
-function sheetsClient() {
-  const auth = new google.auth.GoogleAuth({
+function googleAuth() {
+  return new google.auth.GoogleAuth({
     credentials: {
       client_email: requiredEnv("GOOGLE_SERVICE_ACCOUNT_EMAIL"),
       private_key: normalizeGooglePrivateKey(requiredEnv("GOOGLE_PRIVATE_KEY")),
     },
-    scopes: [READONLY_SCOPE],
+    scopes: READONLY_SCOPES,
   });
-  return google.sheets({ version: "v4", auth });
+}
+
+function sheetsClient() {
+  return google.sheets({ version: "v4", auth: googleAuth() });
+}
+
+function driveClient() {
+  return google.drive({ version: "v3", auth: googleAuth() });
 }
 
 export function getSpreadsheetId(envName = "GOOGLE_SHEET_ID") {
   return parseSpreadsheetId(requiredEnv(envName));
+}
+
+
+export async function readSpreadsheetFileMetadata(envName = "GOOGLE_SHEET_ID") {
+  const fileId = getSpreadsheetId(envName);
+  const response = await driveClient().files.get({
+    fileId,
+    fields: "id,name,mimeType,modifiedTime",
+    supportsAllDrives: true,
+  });
+  const mimeType = response.data.mimeType ?? "";
+  const name = response.data.name ?? "";
+  console.log("[googleSheets] detected file MIME type", { fileId, mimeType, name });
+  return {
+    fileId,
+    mimeType,
+    modifiedTime: response.data.modifiedTime ?? null,
+    name,
+  };
+}
+
+export async function assertNativeGoogleSpreadsheet(envName = "GOOGLE_SHEET_ID") {
+  const metadata = await readSpreadsheetFileMetadata(envName);
+  if (metadata.mimeType === GOOGLE_SHEETS_MIME_TYPE) return metadata;
+  if (metadata.mimeType === XLSX_MIME_TYPE) {
+    throw new Error("The configured file is an Excel (.xlsx) file. Please convert it to a Google Spreadsheet.");
+  }
+  throw new Error("The configured file is not a native Google Spreadsheet. Detected MIME type: " + (metadata.mimeType || "unknown"));
 }
 
 function quoteSheetName(title: string) {
@@ -74,8 +114,9 @@ function quoteSheetName(title: string) {
 }
 
 export async function readLightweightTabs(envName = "GOOGLE_SHEET_ID") {
+  const metadata = await assertNativeGoogleSpreadsheet(envName);
   const response = await sheetsClient().spreadsheets.get({
-    spreadsheetId: getSpreadsheetId(envName),
+    spreadsheetId: metadata.fileId,
     fields: metadataFields,
   });
   const tabs = (response.data.sheets ?? []).map((sheet) => ({
@@ -89,10 +130,11 @@ export async function readLightweightTabs(envName = "GOOGLE_SHEET_ID") {
 }
 
 export async function readLimitedSheet(title: string, maxRows: number, envName = "GOOGLE_SHEET_ID"): Promise<LightweightSheet> {
+  const metadata = await assertNativeGoogleSpreadsheet(envName);
   const safeMaxRows = Math.max(1, Math.min(Math.floor(maxRows), 5000));
   const range = quoteSheetName(title) + "!A1:ZZ" + (safeMaxRows + 1);
   const response = await sheetsClient().spreadsheets.values.get({
-    spreadsheetId: getSpreadsheetId(envName),
+    spreadsheetId: metadata.fileId,
     range,
     majorDimension: "ROWS",
   });

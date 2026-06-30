@@ -1,19 +1,32 @@
 import { NextResponse } from "next/server";
 
-import { lightweightSheetsConfig, readLightweightTabs } from "@/lib/lightweightSheets";
+import { lightweightSheetsConfig, readLightweightTabs, readSpreadsheetFileMetadata } from "@/lib/lightweightSheets";
 
 export const runtime = "nodejs";
+
+const GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet";
+const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+const xlsxError = "The configured file is an Excel (.xlsx) file. Please convert it to a Google Spreadsheet.";
 
 export async function GET() {
   console.log("[/api/sheets/diagnostics] started");
   const config = lightweightSheetsConfig();
+  let fileId = config.spreadsheetId || "";
+  let mimeType = "";
+  let spreadsheetTitle = "";
+  let isGoogleSpreadsheet = false;
+  let canReadSheets = false;
 
   try {
     if (!config.configured) {
       return NextResponse.json({
         success: false,
         configured: false,
-        spreadsheetTitle: "",
+        fileId,
+        mimeType,
+        spreadsheetTitle,
+        isGoogleSpreadsheet,
+        canReadSheets,
         sheetCount: 0,
         tabs: [],
         serviceAccountEmailPresent: config.serviceAccountEmailPresent,
@@ -22,13 +35,65 @@ export async function GET() {
       });
     }
 
-    const { spreadsheetTitle, tabs } = await readLightweightTabs();
+    const metadata = await readSpreadsheetFileMetadata();
+    fileId = metadata.fileId;
+    mimeType = metadata.mimeType;
+    spreadsheetTitle = metadata.name;
+    isGoogleSpreadsheet = mimeType === GOOGLE_SHEETS_MIME_TYPE;
+
+    if (mimeType === XLSX_MIME_TYPE) {
+      return NextResponse.json(
+        {
+          success: false,
+          configured: true,
+          fileId,
+          mimeType,
+          spreadsheetTitle,
+          isGoogleSpreadsheet: false,
+          canReadSheets: false,
+          sheetCount: 0,
+          tabs: [],
+          serviceAccountEmailPresent: config.serviceAccountEmailPresent,
+          privateKeyPresent: config.privateKeyPresent,
+          error: xlsxError,
+        },
+        { status: 400 },
+      );
+    }
+
+    if (!isGoogleSpreadsheet) {
+      return NextResponse.json(
+        {
+          success: false,
+          configured: true,
+          fileId,
+          mimeType,
+          spreadsheetTitle,
+          isGoogleSpreadsheet: false,
+          canReadSheets: false,
+          sheetCount: 0,
+          tabs: [],
+          serviceAccountEmailPresent: config.serviceAccountEmailPresent,
+          privateKeyPresent: config.privateKeyPresent,
+          error: "The configured file is not a native Google Spreadsheet. Detected MIME type: " + (mimeType || "unknown"),
+        },
+        { status: 400 },
+      );
+    }
+
+    const tabsResult = await readLightweightTabs();
+    spreadsheetTitle = tabsResult.spreadsheetTitle || spreadsheetTitle;
+    canReadSheets = true;
     return NextResponse.json({
       success: true,
       configured: true,
+      fileId,
+      mimeType,
       spreadsheetTitle,
-      sheetCount: tabs.length,
-      tabs,
+      isGoogleSpreadsheet,
+      canReadSheets,
+      sheetCount: tabsResult.tabs.length,
+      tabs: tabsResult.tabs,
       serviceAccountEmailPresent: config.serviceAccountEmailPresent,
       privateKeyPresent: config.privateKeyPresent,
     });
@@ -38,7 +103,11 @@ export async function GET() {
       {
         success: false,
         configured: config.configured,
-        spreadsheetTitle: "",
+        fileId,
+        mimeType,
+        spreadsheetTitle,
+        isGoogleSpreadsheet,
+        canReadSheets,
         sheetCount: 0,
         tabs: [],
         serviceAccountEmailPresent: config.serviceAccountEmailPresent,
