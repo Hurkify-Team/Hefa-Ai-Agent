@@ -471,6 +471,22 @@ function sortFacilityMatches(matches: FacilitySearchResult[], query: string) {
   });
 }
 
+
+function facilitySearchMaxCategories() {
+  const value = Number(process.env.FACILITY_SEARCH_MAX_CATEGORIES ?? 8);
+  return Number.isFinite(value) && value > 0 ? Math.min(Math.floor(value), 25) : 8;
+}
+
+async function candidateCategoriesForSearch(source: WorkbookSource, query: string) {
+  const tabs = await readSourceSheetTabs(source);
+  const ranked = tabs
+    .map((tab) => ({ title: tab.title, score: categoryHintScore(tab.title, query) }))
+    .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title));
+  const hinted = ranked.filter((entry) => entry.score > 0).map((entry) => entry.title);
+  const fallback = ranked.map((entry) => entry.title);
+  return (hinted.length ? hinted : fallback).slice(0, facilitySearchMaxCategories());
+}
+
 export async function searchFacilitiesInSource(
   source: WorkbookSource,
   input: SearchFacilitiesInput,
@@ -491,9 +507,33 @@ export async function searchFacilitiesInSource(
     ).slice(0, limit);
   }
 
-  const sheets = await getSourceAllSheetData(source);
+  const categories = await candidateCategoriesForSearch(source, input.query);
+  const matches: FacilitySearchResult[] = [];
 
-  return searchFacilitiesInData(sheets, input, source).slice(0, limit);
+  for (const category of categories) {
+    try {
+      const sheet = await readSourceExistingRecords(source, category);
+      matches.push(...searchFacilitiesInData(
+        {
+          [sheet.category]: {
+            headers: sheet.headers,
+            rows: sheet.rows,
+          },
+        },
+        { ...input, category: sheet.category },
+        source,
+      ));
+      if (matches.length >= limit) break;
+    } catch (error) {
+      console.warn("Facility search skipped category", {
+        category,
+        source,
+        error: error instanceof Error ? error.message : error,
+      });
+    }
+  }
+
+  return sortFacilityMatches(matches, input.query.toLowerCase()).slice(0, limit);
 }
 
 export async function searchFacilities(input: SearchFacilitiesInput): Promise<FacilitySearchResult[]> {

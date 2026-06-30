@@ -198,7 +198,7 @@ type PortalFacilitySummary = {
 
 let portalFacilitySummaryCache: (JsonFileCache<PortalFacilitySummary> & { detailsMtimeMs: number; detailsPath: string }) | null = null;
 
-function getFastPortalFacilitySummary() {
+export function getFastPortalFacilitySummary() {
   const cached = portalFacilitySummaryCache?.value;
 
   if (cached) {
@@ -3366,7 +3366,7 @@ export function startPortalFacilityScan(input: { mode?: PortalScanMode } = {}) {
   const mode = input.mode ?? "quick";
   if (portalRuntime.scanPromise) {
     if (portalRuntime.scanProgress.status === "running" && !portalRuntime.scanStopRequested) {
-      return getPortalFacilitySummary();
+      return getFastPortalFacilitySummary();
     }
 
     portalRuntime.scanPromise = null;
@@ -3379,7 +3379,7 @@ export function startPortalFacilityScan(input: { mode?: PortalScanMode } = {}) {
     completedAt: null,
     currentFacilityHefamaaId: null,
     currentFacilityName: null,
-    detailTotal: mode === "full" ? latestDetailTargetRecords(classifyPortalFacilityRecords(readPortalFacilityCache())).length : 0,
+    detailTotal: 0,
     error: undefined,
     failedDetails: 0,
     lastCapturedFacilityName: null,
@@ -3428,7 +3428,7 @@ export function startPortalFacilityScan(input: { mode?: PortalScanMode } = {}) {
     });
   portalRuntime.scanPromise = scanPromise;
 
-  return getPortalFacilitySummary();
+  return getFastPortalFacilitySummary();
 }
 
 export async function stopPortalFacilityScan() {

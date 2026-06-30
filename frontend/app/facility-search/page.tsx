@@ -1,6 +1,6 @@
 "use client";
 
-import { safeJsonResponse } from "@/lib/safeJson";
+import { safeFetchJson } from "@/lib/safeFetchJson";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -53,14 +53,16 @@ type PortalSearchResponse = {
 };
 
 async function fetchApi<T>(url: string) {
-  const response = await fetch(url, { cache: "no-store" });
-  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/facility-search/page.tsx"));
-
-  if (!payload.ok) {
-    throw new Error(payload.error);
+  const result = await safeFetchJson<ApiResult<T>>(url);
+  if (!result.ok) {
+    throw new Error(result.status === 502 ? "Service temporarily unavailable" : result.error);
   }
 
-  return payload.data;
+  if (!result.data.ok) {
+    throw new Error(result.data.error);
+  }
+
+  return result.data.data;
 }
 
 function formatStatus(status?: string) {

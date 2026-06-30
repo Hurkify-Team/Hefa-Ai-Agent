@@ -1,6 +1,6 @@
 "use client";
 
-import { safeJsonResponse } from "@/lib/safeJson";
+import { safeFetchJson } from "@/lib/safeFetchJson";
 import { useEffect, useState } from "react";
 import {
   AlertTriangle,
@@ -114,14 +114,16 @@ type PortalRecordsResult = {
 };
 
 async function fetchApi<T>(url: string, init?: RequestInit) {
-  const response = await fetch(url, { cache: "no-store", ...init });
-  const payload = (await safeJsonResponse<ApiResult<T>>(response, "app/portal-scan/page.tsx"));
-
-  if (!payload.ok) {
-    throw new Error(payload.error);
+  const result = await safeFetchJson<ApiResult<T>>(url, init);
+  if (!result.ok) {
+    throw new Error(result.status === 502 ? "Service temporarily unavailable" : result.error);
   }
 
-  return payload.data;
+  if (!result.data.ok) {
+    throw new Error(result.data.error);
+  }
+
+  return result.data.data;
 }
 
 function formatCount(value: number) {
