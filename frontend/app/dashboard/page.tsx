@@ -6,6 +6,7 @@ import {
   Activity,
   AlertTriangle,
   BarChart3,
+  BellRing,
   ClipboardList,
   Database,
   FileWarning,
@@ -24,6 +25,24 @@ import type { AuditEntry } from "@/types/audit";
 import type { SheetRow, SheetTab } from "@/types/sheet";
 
 type ApiResult<T> = { ok: true; data: T } | { ok: false; error: string };
+
+type PortalAnalytics = {
+  totalScanned: number;
+  lastScanDate: string | null;
+  verifiedLive: number;
+  staleCache: number;
+  statusCounts: {
+    DOCUMENT_QUERIED: number;
+    UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING: number;
+    PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING: number;
+    FINAL_APPROVAL_PENDING: number;
+  };
+  actionCounts: {
+    facilityReminderRequired: number;
+    hefamaaAttentionRequired: number;
+  };
+  cacheEmpty?: boolean;
+};
 
 type WorkbookReportSummary = {
   totalFacilities: number;
@@ -85,6 +104,7 @@ function rowLabel(row: SheetRow) {
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<WorkbookReportSummary | null>(null);
+  const [portalAnalytics, setPortalAnalytics] = useState<PortalAnalytics | null>(null);
   const [tabs, setTabs] = useState<SheetTab[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [question, setQuestion] = useState("");
@@ -103,10 +123,11 @@ export default function DashboardPage() {
     setIsLoading(true);
     setError(null);
 
-    const [summaryResult, tabsResult, auditResult] = await Promise.allSettled([
+    const [summaryResult, tabsResult, auditResult, portalAnalyticsResult] = await Promise.allSettled([
       fetchApi<WorkbookReportSummary>("/api/reports/summary"),
       fetchApi<SheetTab[]>("/api/sheets/tabs"),
       fetchApi<AuditEntry[]>("/api/audit/list?limit=5"),
+      fetchApi<PortalAnalytics>("/api/portal/analytics"),
     ]);
 
     const warnings: string[] = [];
@@ -130,6 +151,13 @@ export default function DashboardPage() {
     } else {
       setAuditEntries([]);
       warnings.push("Audit log unavailable: " + (auditResult.reason instanceof Error ? auditResult.reason.message : "Unknown error"));
+    }
+
+    if (portalAnalyticsResult.status === "fulfilled") {
+      setPortalAnalytics(portalAnalyticsResult.value);
+    } else {
+      setPortalAnalytics(null);
+      warnings.push("Portal scan analytics unavailable: " + (portalAnalyticsResult.reason instanceof Error ? portalAnalyticsResult.reason.message : "Unknown error"));
     }
 
     setError(warnings.length ? warnings.join(" ") : null);
@@ -195,6 +223,21 @@ export default function DashboardPage() {
     [summary],
   );
 
+  const portalCards = useMemo(
+    () => [
+      { label: "Total Portal Records Scanned", value: portalAnalytics ? formatNumber(portalAnalytics.totalScanned) : "-", tone: "bg-blue-50 text-blue-700" },
+      { label: "Records Verified Live", value: portalAnalytics ? formatNumber(portalAnalytics.verifiedLive) : "-", tone: "bg-emerald-50 text-emerald-700" },
+      { label: "Stale Cache Records", value: portalAnalytics ? formatNumber(portalAnalytics.staleCache) : "-", tone: "bg-amber-50 text-amber-700" },
+      { label: "Document Query", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.DOCUMENT_QUERIED) : "-", tone: "bg-rose-50 text-rose-700" },
+      { label: "Upload Payment Pending", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING) : "-", tone: "bg-orange-50 text-orange-700" },
+      { label: "Payment Approved Pending", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING) : "-", tone: "bg-indigo-50 text-indigo-700" },
+      { label: "Final Approval Pending", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.FINAL_APPROVAL_PENDING) : "-", tone: "bg-violet-50 text-violet-700" },
+      { label: "HEFAMAA Action", value: portalAnalytics ? formatNumber(portalAnalytics.actionCounts.hefamaaAttentionRequired) : "-", tone: "bg-slate-100 text-slate-800" },
+      { label: "Facility Reminder", value: portalAnalytics ? formatNumber(portalAnalytics.actionCounts.facilityReminderRequired) : "-", tone: "bg-cyan-50 text-cyan-700" },
+    ],
+    [portalAnalytics],
+  );
+
   const topCategories = summary?.categorySummary.slice(0, 6) ?? [];
   const topLgas = summary?.lgaSummary.slice(0, 6) ?? [];
   const matchedRows = questionResult?.rows?.slice(0, 5) ?? [];
@@ -240,6 +283,36 @@ export default function DashboardPage() {
             </article>
           ))}
         </div>
+
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <BellRing className="h-5 w-5 text-blue-600" />
+              <div>
+                <h2 className="text-[17px] font-bold text-slate-950">Portal Scan Intelligence</h2>
+                <p className="mt-1 text-[12px] font-semibold text-slate-500">Live portal-cache analytics, workflow status counts, and reminder intelligence</p>
+              </div>
+            </div>
+            <span className="rounded-full bg-slate-50 px-3 py-1 text-[11px] font-bold text-slate-500 ring-1 ring-slate-200">
+              Last scan: {portalAnalytics?.lastScanDate ? new Date(portalAnalytics.lastScanDate).toLocaleString("en-NG") : "Not available"}
+            </span>
+          </div>
+
+          {portalAnalytics && !portalAnalytics.cacheEmpty ? (
+            <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-5">
+              {portalCards.map((card) => (
+                <article className="rounded-lg border border-slate-100 bg-slate-50/70 p-4" key={card.label}>
+                  <span className={`mb-3 inline-flex rounded-lg px-2.5 py-1 text-[11px] font-extrabold ${card.tone}`}>{card.label}</span>
+                  <p className="text-[22px] font-extrabold text-slate-950">{card.value}</p>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-[13px] font-semibold text-slate-500">
+              No portal scan data yet. Run a portal scan to activate portal analytics.
+            </p>
+          )}
+        </section>
 
         <div className="grid gap-5 2xl:grid-cols-[1.15fr_0.85fr]">
           <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">

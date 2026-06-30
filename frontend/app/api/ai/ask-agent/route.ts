@@ -97,6 +97,53 @@ function isHefNoQuestion(question: string) {
   return (asksForOfficialRegistryNumber || asksForFacilityRegistrationNumber) && lookupIntent;
 }
 
+function isFacilitySearchQuestion(question: string) {
+  return /\b(?:find|search|show|list|where\s+is|facilities?\s+(?:in|owned|with)|laborator(?:y|ies)|hospitals?|clinics?|maternit(?:y|ies))\b/i.test(question)
+    && !isHefNoQuestion(question)
+    && !isStaffQuestion(question)
+    && !/\b(?:document queried|reminders?|hefamaa action|stale cache|last portal scan|workflow|status|how many|count|total)\b/i.test(question);
+}
+
+async function answerFacilitySearchViaIndex(question: string) {
+  const { searchFacilityIndex } = await import("@/lib/facilitySearchIndex");
+  const result = await searchFacilityIndex(question, 12);
+
+  if (!result.results.length) {
+    return {
+      answer: "I could not find a matching facility in the Google Sheet categories. Please try another spelling, HEF/NO, phone number, email, LGA, address, or owner name.",
+      rows: [],
+      summary: { query: question, matchCount: 0, intent: result.intent },
+    };
+  }
+
+  const top = result.results[0];
+  const description = [
+    top.facilityName ? top.facilityName : "Facility record",
+    top.hefNo ? "HEF/NO " + top.hefNo : null,
+    top.lga ? "LGA " + top.lga : null,
+    top.address ? "Address: " + top.address : null,
+  ].filter(Boolean).join(". ");
+
+  return {
+    answer: "I found " + result.total + " matching facilit" + (result.total === 1 ? "y" : "ies") + " across the Google Sheet categories. Best match: " + description + ".",
+    rows: result.results.map((match) => ({
+      Source: match.sourceLabel,
+      Category: match.category,
+      "Workbook Row": match.rowNumber,
+      "HEF/NO": match.hefNo || null,
+      "Facility Name": match.facilityName || null,
+      Address: match.address || null,
+      LGA: match.lga || null,
+      LCDA: match.lcda || null,
+      Contact: match.contact || null,
+      Email: match.email || null,
+      "Matched Fields": match.matchedFields.join(", "),
+      Confidence: match.confidence,
+    })),
+    summary: { query: question, matchCount: result.total, intent: result.intent },
+  };
+}
+
 function sheetRequiredQuestion(question: string) {
   return isHefNoQuestion(question) || /\b(?:spreadsheet|google\s*sheet|sheet|workbook|active\s+database|old\s+database|facility\s+code|serial|s\/n|row|missing|incomplete|duplicate|data\s+cleaning|cleaning)\b/i.test(question);
 }
@@ -411,6 +458,25 @@ export async function POST(request: Request) {
           summary: result.summary,
         }],
         actions: exportActionsForQuestion(payload.question),
+      });
+    }
+
+    if (requestedSources.includes("sheets") && isFacilitySearchQuestion(payload.question)) {
+      const result = await answerFacilitySearchViaIndex(payload.question);
+      return ok({
+        question: payload.question,
+        answer: "I checked the HEFAMAA Google Sheet categories.\n\n" + result.answer,
+        sources: [{
+          source: "sheets",
+          label: SOURCE_LABELS.sheets,
+          status: "ok",
+          answer: result.answer,
+          rows: compactRows(result.rows, 12),
+          summary: result.summary,
+        }],
+        rows: compactRows(result.rows, 12),
+        summary: result.summary,
+        actions: [],
       });
     }
 
