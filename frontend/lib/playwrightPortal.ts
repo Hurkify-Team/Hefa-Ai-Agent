@@ -3144,12 +3144,26 @@ async function readPortalReportedRecordCount(page: Page) {
 async function prepareFacilityGridForFullScan(page: Page) {
   const lengthSelector = page.locator('select[name="mainGrid_length"]');
   if (await lengthSelector.count()) {
-    await lengthSelector.selectOption("100");
-    await page.waitForFunction(() => document.querySelectorAll("#mainGrid tbody tr").length >= 50 || !document.querySelector("#mainGrid_next:not(.disabled)"), null, { timeout: 30_000 }).catch(() => undefined);
-    await page.waitForFunction(() => {
-      const processing = document.querySelector<HTMLElement>("#mainGrid_processing");
-      return !processing || processing.style.display === "none";
-    }, null, { timeout: 30_000 }).catch(() => undefined);
+    const changedPageLength = await lengthSelector
+      .selectOption("100", { timeout: 3_000 })
+      .then(() => true)
+      .catch(async () => {
+        return page.evaluate(() => {
+          const select = document.querySelector<HTMLSelectElement>('select[name="mainGrid_length"]');
+          if (!select) return false;
+          select.value = "100";
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        }).catch(() => false);
+      });
+
+    if (changedPageLength) {
+      await page.waitForFunction(() => document.querySelectorAll("#mainGrid tbody tr").length >= 50 || !document.querySelector("#mainGrid_next:not(.disabled)"), null, { timeout: 10_000 }).catch(() => undefined);
+      await page.waitForFunction(() => {
+        const processing = document.querySelector<HTMLElement>("#mainGrid_processing");
+        return !processing || processing.style.display === "none";
+      }, null, { timeout: 10_000 }).catch(() => undefined);
+    }
   }
 
   const info = await page.locator("#mainGrid_info").innerText().catch(() => "");

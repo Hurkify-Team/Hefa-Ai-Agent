@@ -410,7 +410,8 @@ export default function PortalScanPage() {
   const currentDetailIndex = getCurrentDetailIndex(scanProgress);
   const currentDetailPosition = getDetailPosition(currentDetailIndex, detailProgressTotal);
   const captureTiming = getRecentCaptureTiming(scanProgress, nowMs);
-  const scanReady = Boolean(sessionStatus?.browserOpen && sessionStatus.loggedIn && sessionStatus.facilityListDetected);
+  const portalSessionReady = Boolean(sessionStatus?.browserOpen && sessionStatus.loggedIn);
+  const scanReady = portalSessionReady;
   const quickScanReady = scanReady && !isScanning && !isLoading && !isScanRunning;
   const fullScanReady = scanReady && !isScanning && !isLoading && !isScanRunning;
 
@@ -666,7 +667,7 @@ export default function PortalScanPage() {
               className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-blue-50 text-blue-700 shadow-[0_10px_0_rgba(29,78,216,0.30),0_18px_34px_rgba(15,23,42,0.20)] ring-1 ring-blue-100/80 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_12px_0_rgba(29,78,216,0.32),0_22px_38px_rgba(15,23,42,0.22)] active:translate-y-1 active:shadow-[0_4px_0_rgba(29,78,216,0.30),0_10px_22px_rgba(15,23,42,0.18)] disabled:cursor-not-allowed disabled:opacity-55"
               disabled={!quickScanReady}
               onClick={() => void scanPortal("quick")}
-              title={quickScanReady ? "Run Quick Scan" : "Open portal, log in, and keep the facility list visible first"}
+              title={quickScanReady ? "Run Quick Scan" : "Open portal and log in first"}
               type="button"
             >
               {isScanning && runningScanMode === "quick" ? <Loader2 className="h-5 w-5 animate-spin" /> : <Search className="h-5 w-5" />}
@@ -679,7 +680,7 @@ export default function PortalScanPage() {
               className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-blue-600 text-white shadow-[0_10px_0_rgba(30,64,175,0.48),0_18px_34px_rgba(15,23,42,0.24)] ring-1 ring-blue-200/80 transition hover:-translate-y-0.5 hover:bg-blue-500 hover:shadow-[0_12px_0_rgba(30,64,175,0.50),0_22px_38px_rgba(15,23,42,0.26)] active:translate-y-1 active:shadow-[0_4px_0_rgba(30,64,175,0.48),0_10px_22px_rgba(15,23,42,0.20)] disabled:cursor-not-allowed disabled:opacity-55"
               disabled={!fullScanReady}
               onClick={() => void scanPortal("full")}
-              title={fullScanReady ? "Run Full Detail Scan" : "Open portal, log in, and keep the facility list visible first"}
+              title={fullScanReady ? "Run Full Detail Scan" : "Open portal and log in first"}
               type="button"
             >
               {isScanning && runningScanMode === "full" ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
