@@ -1408,6 +1408,10 @@ async function reconnectExistingDedicatedPortalSession() {
 }
 
 async function requireActivePortalSessionForScan(mode: PortalScanMode) {
+  if (process.env.RENDER && !getSession()) {
+    throw new Error("Portal scanning needs a logged-in Playwright browser session. Render cannot control your local Chrome tab directly; run portal scans locally or connect a portal browser bridge/headless login workflow first.");
+  }
+
   const openingSession = portalRuntime.openingSession;
   if (openingSession) {
     await withTimeout(openingSession, 8_000, "Portal browser is still opening. Please wait for it to finish, log in, then run the scan again.").catch(() => undefined);
@@ -3180,17 +3184,46 @@ async function clickNextFacilityPage(page: Page, currentFingerprint: string) {
   const next = page.locator("#mainGrid_next:not(.disabled) a");
   if (!(await next.count())) return false;
 
-  await next.click();
-  await page.waitForFunction(
+  const previousFingerprint = currentFingerprint.replace(/\s+/g, " ").trim();
+
+  const clicked = await page.evaluate(() => {
+    const win = window as typeof window & {
+      jQuery?: ((selector: string) => {
+        DataTable?: () => {
+          page?: (direction: "next") => { draw: (mode: "page") => unknown };
+        };
+      });
+    };
+
+    const dataTable = win.jQuery?.("#mainGrid")?.DataTable?.();
+    if (dataTable?.page) {
+      dataTable.page("next").draw("page");
+      return true;
+    }
+
+    const link = document.querySelector<HTMLAnchorElement>("#mainGrid_next:not(.disabled) a");
+    if (!link) return false;
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, view: window }));
+    return true;
+  }).catch(async () => next
+    .click({ timeout: 2_000, force: true })
+    .then(() => true)
+    .catch(() => false));
+
+  if (!clicked) return false;
+
+  const pageChanged = await page.waitForFunction(
     (previousFingerprint) => {
       const processing = document.querySelector<HTMLElement>("#mainGrid_processing");
       const fingerprint = document.querySelector("#mainGrid tbody")?.textContent?.replace(/\s+/g, " ").trim() ?? "";
       return (!processing || processing.style.display === "none") && Boolean(fingerprint) && fingerprint !== previousFingerprint;
     },
-    currentFingerprint.replace(/\s+/g, " ").trim(),
-    { timeout: 30_000 },
-  );
-  return true;
+    previousFingerprint,
+    { timeout: 12_000 },
+  ).then(() => true).catch(() => false);
+
+  const nextDisabled = await page.evaluate(() => Boolean(document.querySelector("#mainGrid_next.disabled, #mainGrid_next.paginate_button.disabled"))).catch(() => false);
+  return pageChanged && !nextDisabled;
 }
 
 async function scanFacilityList(
@@ -3833,6 +3866,18 @@ function buildRenewalSelectionFromRecord(input: {
 }
 
 export async function openPortal() {
+  if (process.env.RENDER && !getSession()) {
+    return {
+      status: "closed",
+      url: getPortalUrl(),
+      requiresManualLogin: true,
+      persistentProfile: true,
+      browserChannel: browserChannelLabel(getPortalBrowserChannel()),
+      profileName: profileName(getPortalProfileDir()),
+      note: "Hosted Render cannot open or control your local Chrome tab. Run portal scanning locally, or configure a portal browser bridge/headless login workflow.",
+    };
+  }
+
   const currentSession = getSession();
 
   if (currentSession && !currentSession.page.isClosed()) {
