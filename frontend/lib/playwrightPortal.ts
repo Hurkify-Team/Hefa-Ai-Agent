@@ -4019,7 +4019,7 @@ export const PortalSessionManager = {
   status: getPortalSessionManagerStatus,
 };
 
-export async function searchFacility({ facilityName }: SearchFacilityInput) {
+export async function searchFacility({ facilityName, openSelectedRecord = true }: SearchFacilityInput) {
   const session = await getActiveSession();
   const { page } = session;
   const query = facilityName.trim();
@@ -4081,7 +4081,7 @@ export async function searchFacility({ facilityName }: SearchFacilityInput) {
     };
   }
 
-  const shouldOpenSelectedRecord = true;
+  const shouldOpenSelectedRecord = openSelectedRecord;
   const clickedSelectedRecord = shouldOpenSelectedRecord
     ? await openFacilityResult(page, selection.selectedRecord.index).catch(() => false)
     : false;

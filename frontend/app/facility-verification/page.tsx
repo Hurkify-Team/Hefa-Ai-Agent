@@ -24,6 +24,7 @@ type VerificationRow = {
 type VerificationResponse = {
   rows: VerificationRow[];
   summary: { total: number; verified: number; notFound: number; livePortalChecked: number };
+  warnings?: string[];
 };
 
 async function fetchApi<T>(url: string, init?: RequestInit) {
@@ -75,7 +76,7 @@ export default function FacilityVerificationPage() {
         });
       }
       setResult(response);
-      setMessage("Verification completed. Only confirmed matches are marked Yes.");
+      setMessage(response.warnings?.length ? response.warnings.join(" ") : "Verification completed. Only confirmed matches are marked Yes.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to verify facilities.");
     } finally {

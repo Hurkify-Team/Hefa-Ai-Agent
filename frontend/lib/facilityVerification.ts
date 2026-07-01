@@ -90,7 +90,7 @@ async function bestSheetMatch(name: string) {
 }
 
 async function livePortalMatch(name: string) {
-  const result = await withTimeout(searchFacility({ facilityName: name }), 20_000, "Live portal facility search");
+  const result = await withTimeout(searchFacility({ facilityName: name, openSelectedRecord: false }), 12_000, "Live portal facility search");
   if (result.status === "no_match" || result.status === "manual_search_required") {
     return { found: false, result, confidence: 0 };
   }
@@ -111,8 +111,10 @@ async function livePortalMatch(name: string) {
   return { found: Boolean(best && confidence >= 0.55), result, best, confidence };
 }
 
-export async function verifyFacilityNames(names: string[], options: { livePortal?: boolean } = {}) {
+export async function verifyFacilityNames(names: string[], options: { livePortal?: boolean; maxLiveChecks?: number } = {}) {
   const livePortal = options.livePortal !== false;
+  const maxLiveChecks = Math.max(0, options.maxLiveChecks ?? Number(process.env.FACILITY_VERIFICATION_MAX_LIVE_CHECKS ?? 25));
+  let liveChecksAttempted = 0;
   const rows: FacilityVerificationRow[] = [];
 
   for (const rawName of names) {
@@ -131,11 +133,16 @@ export async function verifyFacilityNames(names: string[], options: { livePortal
     let live: Awaited<ReturnType<typeof livePortalMatch>> | null = null;
 
     if (!sheet && !cache && livePortal) {
-      try {
-        live = await livePortalMatch(name);
-        if (!live.found && live.result.status === "manual_search_required") notes.push(live.result.note);
-      } catch (error) {
-        notes.push(error instanceof Error ? error.message : "Live portal verification failed.");
+      if (liveChecksAttempted >= maxLiveChecks) {
+        notes.push("Live portal verification skipped because this batch reached the live-check limit. Re-run with fewer unresolved names or increase FACILITY_VERIFICATION_MAX_LIVE_CHECKS.");
+      } else {
+        liveChecksAttempted += 1;
+        try {
+          live = await livePortalMatch(name);
+          if (!live.found && live.result.status === "manual_search_required") notes.push(live.result.note);
+        } catch (error) {
+          notes.push(error instanceof Error ? error.message : "Live portal verification failed.");
+        }
       }
     }
 
@@ -171,7 +178,7 @@ export async function verifyFacilityNames(names: string[], options: { livePortal
       total: rows.length,
       verified: rows.filter((row) => row.finalResult === "Verified").length,
       notFound: rows.filter((row) => row.finalResult === "Not Found").length,
-      livePortalChecked: rows.filter((row) => row.foundInLivePortal === "Yes" || row.notes.includes("Live portal")).length,
+      livePortalChecked: liveChecksAttempted,
     },
   };
 }
