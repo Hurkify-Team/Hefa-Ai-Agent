@@ -15,6 +15,8 @@ type PortalSession = {
   page: Page;
   profileDir: string;
   storageStatePath?: string;
+  openedAt?: string;
+  lastActivity?: string;
   renewalSelection?: PortalRenewalSelection | null;
   lastSearchRows?: FacilitySearchResultRow[];
   lastSearchQuery?: string;
@@ -1263,6 +1265,7 @@ async function createPortalSession(options: { fastOpen?: boolean } = {}) {
     void closeExtraBlankTabs(context, page).catch(() => undefined);
     await page.bringToFront().catch(() => undefined);
 
+    const now = new Date().toISOString();
     const nextSession = {
       browser: launched.browser,
       browserChannel: launched.browserChannel,
@@ -1270,6 +1273,8 @@ async function createPortalSession(options: { fastOpen?: boolean } = {}) {
       page,
       profileDir: launched.profileDir,
       storageStatePath: launched.storageStatePath,
+      openedAt: now,
+      lastActivity: now,
     };
     setSession(nextSession);
 
@@ -1383,6 +1388,7 @@ async function reconnectExistingDedicatedPortalSession() {
 
     await page.bringToFront().catch(() => undefined);
 
+    const now = new Date().toISOString();
     const session: PortalSession = {
       browser,
       browserChannel: getPortalBrowserChannel(),
@@ -1390,6 +1396,8 @@ async function reconnectExistingDedicatedPortalSession() {
       page,
       profileDir: getPortalProfileDir(),
       storageStatePath: getPortalStorageStatePath(),
+      openedAt: now,
+      lastActivity: now,
     };
     setSession(session);
     return session;
@@ -1418,6 +1426,7 @@ async function requireActivePortalSessionForScan(mode: PortalScanMode) {
   if (session && !session.page.isClosed() && await isPortalSessionHealthy(session, 1_200)) {
     const page = choosePortalPage(session.context, session.page) ?? session.page;
     session.page = page;
+    session.lastActivity = new Date().toISOString();
     setSession(session);
     return session;
   }
@@ -3293,7 +3302,11 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick") {
     await waitForManualPortalLogin(primaryPage, 120_000);
   }
 
-  const scanPage = await session.context.newPage();
+  if (!primaryPage) {
+    throw new Error("Please click Open Portal and login first before running " + (mode === "full" ? "Full Scan" : "Quick Scan") + ".");
+  }
+
+  const scanPage = primaryPage;
   scanPage.setDefaultTimeout(10_000);
   let partialRecords: PortalFacilityRecord[] = [];
   let lastPartialWriteCount = 0;
@@ -3420,9 +3433,8 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick") {
     }
     throw error;
   } finally {
-    await scanPage.close().catch(() => undefined);
-    if (primaryPage && !primaryPage.isClosed()) {
-      session.page = primaryPage;
+    if (!scanPage.isClosed()) {
+      session.page = scanPage;
       setSession(session);
     }
   }
@@ -3893,6 +3905,71 @@ export async function getPortalSessionStatus() {
             : "Portal browser is closed. Opening it will reuse the saved HEFAMAA profile if the portal session is still valid.",
   };
 }
+
+async function detectFacilityListPage(page: Page) {
+  try {
+    return await page.evaluate(() => {
+      const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLowerCase();
+      const tableLike = document.querySelectorAll("table tbody tr, [role='row'], .ag-row, .dx-row, tr").length;
+      const hasFacilityWords = /facility|facilities|hefamaa|hef\/?no|registration status|category/.test(text);
+      const hasListWords = /search|filter|records|showing|entries|renewal|new registration/.test(text);
+      return Boolean(tableLike >= 3 && hasFacilityWords && hasListWords);
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function detectLoggedInPage(page: Page) {
+  try {
+    const url = page.url().toLowerCase();
+    if (/\/login|signin|sign-in/.test(url)) return false;
+    return await page.evaluate(() => {
+      const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLowerCase();
+      const passwordInput = document.querySelector("input[type='password']");
+      if (passwordInput && /login|sign in|password/.test(text)) return false;
+      return !/login to your account|sign in|forgot password/.test(text);
+    });
+  } catch {
+    return false;
+  }
+}
+
+export async function getPortalSessionManagerStatus() {
+  let session = getSession();
+  if ((!session || session.page.isClosed()) && (await portalDebuggingEndpointReady(getPortalDebuggingPort()))) {
+    session = await reconnectExistingDedicatedPortalSession();
+  }
+
+  const browserOpen = Boolean(session && !session.page.isClosed());
+  const currentPage = browserOpen ? session?.page.url() ?? null : null;
+  const loggedIn = browserOpen && session ? await detectLoggedInPage(session.page) : false;
+  const facilityListDetected = browserOpen && session ? await detectFacilityListPage(session.page) : false;
+  const cachedFacilities = classifyPortalFacilityRecords(readPortalFacilityCache()).length;
+  const summary = getFastPortalFacilitySummary();
+
+  return {
+    browserOpen,
+    loggedIn,
+    facilityListDetected,
+    currentPage,
+    cachedFacilities,
+    lastScan: summary.lastScanned ?? summary.scanProgress.completedAt ?? null,
+    scanRunning: portalRuntime.scanProgress.status === "running" && Boolean(portalRuntime.scanPromise),
+    openedAt: session?.openedAt ?? null,
+    lastActivity: session?.lastActivity ?? null,
+    currentFacility: portalRuntime.scanProgress.currentFacilityName ?? null,
+    scanProgress: portalRuntime.scanProgress,
+  };
+}
+
+export const PortalSessionManager = {
+  close: closePortal,
+  getSession,
+  open: openPortal,
+  requireSessionForScan: requireActivePortalSessionForScan,
+  status: getPortalSessionManagerStatus,
+};
 
 export async function searchFacility({ facilityName }: SearchFacilityInput) {
   const session = await getActiveSession();

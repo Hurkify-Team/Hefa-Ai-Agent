@@ -88,6 +88,19 @@ type PortalStatusResult = {
   profileName: string;
 };
 
+type PortalSessionManagerStatus = {
+  browserOpen: boolean;
+  loggedIn: boolean;
+  facilityListDetected: boolean;
+  currentPage: string | null;
+  cachedFacilities: number;
+  lastScan: string | null;
+  scanRunning: boolean;
+  openedAt: string | null;
+  lastActivity: string | null;
+  currentFacility: string | null;
+};
+
 type PortalReleaseLockResult = {
   released: boolean;
   profileName: string;
@@ -371,6 +384,7 @@ function MiniBarList({ rows, tone = "blue" }: { rows: Array<{ label: string; cou
 
 export default function PortalScanPage() {
   const [status, setStatus] = useState<PortalStatusResult | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<PortalSessionManagerStatus | null>(null);
   const [summary, setSummary] = useState<PortalFacilitySummary | null>(null);
   const [message, setMessage] = useState("Loading portal scan status...");
   const [isLoading, setIsLoading] = useState(true);
@@ -396,6 +410,9 @@ export default function PortalScanPage() {
   const currentDetailIndex = getCurrentDetailIndex(scanProgress);
   const currentDetailPosition = getDetailPosition(currentDetailIndex, detailProgressTotal);
   const captureTiming = getRecentCaptureTiming(scanProgress, nowMs);
+  const scanReady = Boolean(sessionStatus?.browserOpen && sessionStatus.loggedIn && sessionStatus.facilityListDetected);
+  const quickScanReady = scanReady && !isScanning && !isLoading && !isScanRunning;
+  const fullScanReady = scanReady && !isScanning && !isLoading && !isScanRunning;
 
   useEffect(() => {
     void loadStatusAndSummary();
@@ -412,8 +429,12 @@ export default function PortalScanPage() {
 
     const pollSummary = async () => {
       try {
-        const nextSummary = await fetchApi<PortalFacilitySummary>("/api/portal/summary");
+        const [nextSummary, nextSessionStatus] = await Promise.all([
+          fetchApi<PortalFacilitySummary>("/api/portal/summary"),
+          fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"),
+        ]);
         setSummary(nextSummary);
+        setSessionStatus(nextSessionStatus);
         if (nextSummary.scanProgress.status === "completed") {
           setMessage(nextSummary.scanProgress.scanMode === "full"
             ? "Full detail scan completed. Portal details are saved for offline AI answers."
@@ -439,12 +460,14 @@ export default function PortalScanPage() {
     setMessage("Loading portal status and summary...");
 
     try {
-      const [nextStatus, nextSummary] = await Promise.all([
+      const [nextStatus, nextSummary, nextSessionStatus] = await Promise.all([
         fetchApi<PortalStatusResult>("/api/portal/status"),
         fetchApi<PortalFacilitySummary>("/api/portal/summary"),
+        fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"),
       ]);
       setStatus(nextStatus);
       setSummary(nextSummary);
+      setSessionStatus(nextSessionStatus);
       if (nextSummary.scanProgress.status === "failed") {
         setMessage(nextSummary.scanProgress.error ?? "Portal scan failed. Log in to the portal and run the scan again.");
       } else if (nextSummary.scanProgress.status === "cancelled") {
@@ -469,35 +492,16 @@ export default function PortalScanPage() {
 
   async function openPortal() {
     setIsOpening(true);
-    const isLocalRuntime = ["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
-    setMessage(isLocalRuntime ? "Opening controllable HEFAMAA portal browser..." : "Opening HEFAMAA portal in a new browser tab...");
+    setMessage("Opening managed HEFAMAA portal browser...");
 
     try {
-      if (isLocalRuntime) {
-        const nextStatus = await fetchApi<PortalStatusResult>("/api/portal/open", {
-          method: "POST",
-        });
-        setStatus(nextStatus);
-        setMessage(nextStatus.note ?? "Portal opened. Log in manually, then run Quick Scan or Full Scan.");
-        return;
-      }
-
-      const result = await fetchApi<{ url: string }>("/api/portal/url");
-      const opened = window.open(result.url, "_blank", "noopener,noreferrer");
-
-      if (!opened) {
-        throw new Error("Your browser blocked the portal tab. Allow popups for this app, then click Open Portal again.");
-      }
-
-      const nextStatus: PortalStatusResult = {
-        status: "opened",
-        url: result.url,
-        note: "Portal opened. Log in manually. Hosted browser-tab scan needs the portal bridge before backend automation can control this tab.",
-        persistentProfile: false,
-        profileName: "Browser tab",
-      };
+      const nextStatus = await fetchApi<PortalStatusResult>("/api/portal/open", {
+        method: "POST",
+      });
+      const nextSessionStatus = await fetchApi<PortalSessionManagerStatus>("/api/portal/session/status");
       setStatus(nextStatus);
-      setMessage("Portal opened. Log in manually. On hosted Render, backend scanning requires the portal bridge/session workflow.");
+      setSessionStatus(nextSessionStatus);
+      setMessage(nextStatus.note ?? "Portal opened. Log in manually, then navigate to the facility list before scanning.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to open portal.");
     } finally {
@@ -518,6 +522,7 @@ export default function PortalScanPage() {
         body: JSON.stringify({ mode }),
       });
       setSummary(nextSummary);
+      setSessionStatus(await fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"));
       setMessage(mode === "full"
         ? "Full detail scan started in the background. It will skip older yearly renewal portals and capture the latest/current facility details."
         : "Quick scan started in the background. Progress will update automatically.");
@@ -645,7 +650,7 @@ export default function PortalScanPage() {
             <button
               aria-label="Run quick portal scan"
               className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-blue-50 text-blue-700 shadow-[0_10px_0_rgba(29,78,216,0.30),0_18px_34px_rgba(15,23,42,0.20)] ring-1 ring-blue-100/80 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_12px_0_rgba(29,78,216,0.32),0_22px_38px_rgba(15,23,42,0.22)] active:translate-y-1 active:shadow-[0_4px_0_rgba(29,78,216,0.30),0_10px_22px_rgba(15,23,42,0.18)] disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={isScanning || isLoading || isScanRunning}
+              disabled={!quickScanReady}
               onClick={() => void scanPortal("quick")}
               title="Run Quick Scan"
               type="button"
@@ -658,7 +663,7 @@ export default function PortalScanPage() {
             <button
               aria-label="Run full detail scan"
               className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-blue-600 text-white shadow-[0_10px_0_rgba(30,64,175,0.48),0_18px_34px_rgba(15,23,42,0.24)] ring-1 ring-blue-200/80 transition hover:-translate-y-0.5 hover:bg-blue-500 hover:shadow-[0_12px_0_rgba(30,64,175,0.50),0_22px_38px_rgba(15,23,42,0.26)] active:translate-y-1 active:shadow-[0_4px_0_rgba(30,64,175,0.48),0_10px_22px_rgba(15,23,42,0.20)] disabled:cursor-not-allowed disabled:opacity-55"
-              disabled={isScanning || isLoading || isScanRunning}
+              disabled={!fullScanReady}
               onClick={() => void scanPortal("full")}
               title="Run Full Detail Scan"
               type="button"
@@ -753,6 +758,21 @@ export default function PortalScanPage() {
                     {status?.profileLocked ? `Locked${status.profileLockPid ? ` (${status.profileLockPid})` : ""}` : "Unlocked"}
                   </p>
                 </div>
+                {[
+                  ["Browser", sessionStatus?.browserOpen ? "Open" : "Closed"],
+                  ["Logged In", sessionStatus?.loggedIn ? "Yes" : "No"],
+                  ["Facility Table", sessionStatus?.facilityListDetected ? "Detected" : "Not detected"],
+                  ["Quick Scan Ready", quickScanReady ? "Ready" : "Waiting"],
+                  ["Full Scan Ready", fullScanReady ? "Ready" : "Waiting"],
+                  ["Facilities Cached", sessionStatus ? formatCount(sessionStatus.cachedFacilities) : "-"],
+                  ["Current Facility", sessionStatus?.currentFacility || scanProgress?.currentFacilityName || "None"],
+                  ["Last Activity", sessionStatus?.lastActivity ?? "-"],
+                ].map(([label, value]) => (
+                  <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4" key={label}>
+                    <p className="text-[11px] uppercase tracking-[0.18em] text-blue-700">{label}</p>
+                    <p className="mt-2 break-words text-[14px] font-semibold text-slate-950">{value}</p>
+                  </div>
+                ))}
               </div>
             </div>
 
