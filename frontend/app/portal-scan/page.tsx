@@ -469,9 +469,19 @@ export default function PortalScanPage() {
 
   async function openPortal() {
     setIsOpening(true);
-    setMessage("Opening HEFAMAA portal in a new browser tab...");
+    const isLocalRuntime = ["localhost", "127.0.0.1", "0.0.0.0"].includes(window.location.hostname);
+    setMessage(isLocalRuntime ? "Opening controllable HEFAMAA portal browser..." : "Opening HEFAMAA portal in a new browser tab...");
 
     try {
+      if (isLocalRuntime) {
+        const nextStatus = await fetchApi<PortalStatusResult>("/api/portal/open", {
+          method: "POST",
+        });
+        setStatus(nextStatus);
+        setMessage(nextStatus.note ?? "Portal opened. Log in manually, then run Quick Scan or Full Scan.");
+        return;
+      }
+
       const result = await fetchApi<{ url: string }>("/api/portal/url");
       const opened = window.open(result.url, "_blank", "noopener,noreferrer");
 
@@ -482,12 +492,12 @@ export default function PortalScanPage() {
       const nextStatus: PortalStatusResult = {
         status: "opened",
         url: result.url,
-        note: "Portal opened. Log in manually, then run Quick Scan or Full Scan only after the portal session is active.",
+        note: "Portal opened. Log in manually. Hosted browser-tab scan needs the portal bridge before backend automation can control this tab.",
         persistentProfile: false,
         profileName: "Browser tab",
       };
       setStatus(nextStatus);
-      setMessage("Portal opened. Log in manually before running Quick Scan or Full Scan.");
+      setMessage("Portal opened. Log in manually. On hosted Render, backend scanning requires the portal bridge/session workflow.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to open portal.");
     } finally {
