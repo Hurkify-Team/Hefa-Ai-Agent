@@ -3822,31 +3822,18 @@ export async function openPortal() {
   const currentSession = getSession();
 
   if (currentSession && !currentSession.page.isClosed()) {
-    const { page } = await openPortalTab({ fastOpen: true });
+    void currentSession.page.bringToFront().catch(() => undefined);
+    currentSession.lastActivity = new Date().toISOString();
+    setSession(currentSession);
     return {
       status: "opened",
-      url: page.url(),
+      url: currentSession.page.url(),
       requiresManualLogin: true,
       persistentProfile: true,
       browserChannel: browserChannelLabel(currentSession.browserChannel ?? getPortalBrowserChannel()),
       profileName: profileName(currentSession.profileDir),
       note: "HEFAMAA portal browser is already active and has been brought to the front.",
     };
-  }
-
-  if (await portalDebuggingEndpointReady(getPortalDebuggingPort())) {
-    const session = await ensureSession({ fastOpen: true }).catch(() => null);
-    if (session && !session.page.isClosed()) {
-      return {
-        status: "opened",
-        url: session.page.url(),
-        requiresManualLogin: true,
-        persistentProfile: true,
-        browserChannel: browserChannelLabel(session.browserChannel ?? getPortalBrowserChannel()),
-        profileName: profileName(session.profileDir),
-        note: "Reconnected to the existing HEFAMAA portal Chrome window and brought it to the front.",
-      };
-    }
   }
 
   if (!portalRuntime.openingSession) {
@@ -3868,7 +3855,7 @@ export async function openPortal() {
     persistentProfile: true,
     browserChannel: browserChannelLabel(getPortalBrowserChannel()),
     profileName: profileName(getPortalProfileDir()),
-    note: "HEFAMAA portal browser launch requested. The dedicated portal window is opening in the background; log in manually if requested. Search and capture will reuse it when ready.",
+    note: "HEFAMAA portal browser launch requested. The dedicated portal window should open shortly; log in manually, then navigate to the facility list.",
   };
 }
 
@@ -3910,10 +3897,11 @@ async function detectFacilityListPage(page: Page) {
   try {
     return await page.evaluate(() => {
       const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLowerCase();
-      const tableLike = document.querySelectorAll("table tbody tr, [role='row'], .ag-row, .dx-row, tr").length;
-      const hasFacilityWords = /facility|facilities|hefamaa|hef\/?no|registration status|category/.test(text);
-      const hasListWords = /search|filter|records|showing|entries|renewal|new registration/.test(text);
-      return Boolean(tableLike >= 3 && hasFacilityWords && hasListWords);
+      const tableLike = document.querySelectorAll("table tbody tr, [role='row'], .ag-row, .dx-row, tr, table").length;
+      const inputLike = document.querySelectorAll("input, select, button").length;
+      const hasFacilityWords = /facility|facilities|hefamaa|hef\/?no|registration status|category|manage facilities|facility name/.test(text);
+      const hasListWords = /search|filter|records|showing|entries|renewal|new registration|approved|pending|queried/.test(text);
+      return Boolean(hasFacilityWords && (hasListWords || tableLike >= 1 || inputLike >= 3));
     });
   } catch {
     return false;
@@ -3928,7 +3916,8 @@ async function detectLoggedInPage(page: Page) {
       const text = (document.body?.innerText || "").replace(/\s+/g, " ").toLowerCase();
       const passwordInput = document.querySelector("input[type='password']");
       if (passwordInput && /login|sign in|password/.test(text)) return false;
-      return !/login to your account|sign in|forgot password/.test(text);
+      if (/login to your account|forgot password/.test(text)) return false;
+      return /dashboard|logout|sign out|facility|facilities|application|renewal|profile|manage/.test(text) || text.length > 200;
     });
   } catch {
     return false;
