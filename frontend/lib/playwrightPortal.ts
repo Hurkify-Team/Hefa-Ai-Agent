@@ -513,6 +513,10 @@ function getPortalUrl() {
   }
 }
 
+export function getConfiguredPortalUrl() {
+  return getPortalUrl();
+}
+
 function getPortalLoginUrl() {
   return new URL("/login", getPortalUrl()).toString();
 }
@@ -1358,6 +1362,68 @@ async function openPortalTab(options: { fastOpen?: boolean } = {}) {
   }
 
   return ensureSession({ fastOpen: options.fastOpen });
+}
+
+async function reconnectExistingDedicatedPortalSession() {
+  const debuggingPort = getPortalDebuggingPort();
+  if (!(await portalDebuggingEndpointReady(debuggingPort))) return null;
+
+  try {
+    const { chromium } = await import("playwright");
+    const browser = await chromium.connectOverCDP("http://127.0.0.1:" + debuggingPort, { timeout: 5_000 });
+    const context = browser.contexts()[0];
+    if (!context) return null;
+
+    const page = choosePortalPage(context) ?? (await context.newPage());
+    page.setDefaultTimeout(15_000);
+
+    if (isBlankOrNewTab(page) || !isPortalPage(page)) {
+      await navigateToPortal(page, { fast: true }).catch(() => undefined);
+    }
+
+    await page.bringToFront().catch(() => undefined);
+
+    const session: PortalSession = {
+      browser,
+      browserChannel: getPortalBrowserChannel(),
+      context,
+      page,
+      profileDir: getPortalProfileDir(),
+      storageStatePath: getPortalStorageStatePath(),
+    };
+    setSession(session);
+    return session;
+  } catch (error) {
+    console.warn("[portal/session] existing dedicated portal session is not reusable", scanErrorMessage(error));
+    return null;
+  }
+}
+
+async function requireActivePortalSessionForScan(mode: PortalScanMode) {
+  const openingSession = portalRuntime.openingSession;
+  if (openingSession) {
+    await withTimeout(openingSession, 8_000, "Portal browser is still opening. Please wait for it to finish, log in, then run the scan again.").catch(() => undefined);
+  }
+
+  let currentSession = getSession();
+  if (currentSession && !(await isPortalSessionHealthy(currentSession, 1_200))) {
+    await discardStalePortalSession(
+      currentSession,
+      "Stale HEFAMAA portal browser session detected before portal scan. Reopen the portal and log in before scanning.",
+    );
+    currentSession = null;
+  }
+
+  const session = currentSession ?? await reconnectExistingDedicatedPortalSession();
+  if (session && !session.page.isClosed() && await isPortalSessionHealthy(session, 1_200)) {
+    const page = choosePortalPage(session.context, session.page) ?? session.page;
+    session.page = page;
+    setSession(session);
+    return session;
+  }
+
+  const label = mode === "full" ? "Full Scan" : "Quick Scan";
+  throw new Error("Please click Open Portal and login first before running " + label + ".");
 }
 async function getActiveSession() {
   const openingSession = portalRuntime.openingSession;
@@ -3221,7 +3287,7 @@ async function triggerNotificationAutoSendAfterScan(mode: PortalScanMode) {
 
 export async function scanAllPortalFacilities(mode: PortalScanMode = "quick") {
   throwIfPortalScanStopped();
-  const session = await ensureSession({ fastOpen: false });
+  const session = await requireActivePortalSessionForScan(mode);
   const primaryPage = session.page && !session.page.isClosed() ? session.page : null;
   if (primaryPage) {
     await waitForManualPortalLogin(primaryPage, 120_000);
@@ -3362,7 +3428,7 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick") {
   }
 }
 
-export function startPortalFacilityScan(input: { mode?: PortalScanMode } = {}) {
+export async function startPortalFacilityScan(input: { mode?: PortalScanMode } = {}) {
   const mode = input.mode ?? "quick";
   if (portalRuntime.scanPromise) {
     if (portalRuntime.scanProgress.status === "running" && !portalRuntime.scanStopRequested) {
@@ -3372,6 +3438,8 @@ export function startPortalFacilityScan(input: { mode?: PortalScanMode } = {}) {
     portalRuntime.scanPromise = null;
     portalRuntime.openingSession = null;
   }
+
+  await requireActivePortalSessionForScan(mode);
 
   portalRuntime.scanStopRequested = false;
   const startedAt = new Date().toISOString();

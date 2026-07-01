@@ -469,14 +469,25 @@ export default function PortalScanPage() {
 
   async function openPortal() {
     setIsOpening(true);
-    setMessage("Opening portal... please wait.");
+    setMessage("Opening HEFAMAA portal in a new browser tab...");
 
     try {
-      const nextStatus = await fetchApi<PortalStatusResult>("/api/portal/open", {
-        method: "POST",
-      });
+      const result = await fetchApi<{ url: string }>("/api/portal/url");
+      const opened = window.open(result.url, "_blank", "noopener,noreferrer");
+
+      if (!opened) {
+        throw new Error("Your browser blocked the portal tab. Allow popups for this app, then click Open Portal again.");
+      }
+
+      const nextStatus: PortalStatusResult = {
+        status: "opened",
+        url: result.url,
+        note: "Portal opened. Log in manually, then run Quick Scan or Full Scan only after the portal session is active.",
+        persistentProfile: false,
+        profileName: "Browser tab",
+      };
       setStatus(nextStatus);
-      setMessage(nextStatus.note ?? "Portal opened. You can now run a quick scan or full detail scan.");
+      setMessage("Portal opened. Log in manually before running Quick Scan or Full Scan.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to open portal.");
     } finally {

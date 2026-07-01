@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   try {
     logMemory("/api/portal/scan start");
     const payload = await readPayload(request);
-    const result = startPortalFacilityScan({ mode: payload.mode });
+    const result = await startPortalFacilityScan({ mode: payload.mode });
     logMemory("/api/portal/scan end");
     return ok(result);
   } catch (error) {
