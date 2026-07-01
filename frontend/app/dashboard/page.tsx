@@ -71,7 +71,6 @@ async function fetchApi<T>(url: string, init?: RequestInit) {
   const result = await safeFetchJson<ApiResult<T>>(url, init);
 
   if (!result.ok) {
-    console.error("[dashboard] API request failed", { endpoint: url, error: result.error, status: result.status, raw: result.raw });
     throw new Error(result.status === 502 ? "Service temporarily unavailable" : result.error);
   }
 

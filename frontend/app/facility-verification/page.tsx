@@ -233,6 +233,13 @@ export default function FacilityVerificationPage() {
               <Stat label="Live Checked" value={result?.summary.livePortalChecked ?? "-"} tone="blue" />
             </div>
 
+            {result?.rows.length ? (
+              <button className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-[13px] font-black text-white shadow-sm transition hover:bg-blue-700" onClick={exportPdf} type="button">
+                <Download className="h-4 w-4" />
+                Export Verification Result as PDF
+              </button>
+            ) : null}
+
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
                 <h2 className="text-[17px] font-black text-slate-950">Verification Report</h2>
