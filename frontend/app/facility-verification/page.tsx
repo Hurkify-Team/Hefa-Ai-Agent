@@ -2,7 +2,7 @@
 
 import { safeFetchJson } from "@/lib/safeFetchJson";
 import { FormEvent, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, FileCheck2, Loader2, Upload, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileCheck2, Loader2, Upload, XCircle } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
 
@@ -34,6 +34,96 @@ async function fetchApi<T>(url: string, init?: RequestInit) {
   return result.data.data;
 }
 
+function exportTimestamp() {
+  return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+function escapePdfText(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[^\x20-\x7E]/g, "?")
+    .replace(/([\\()])/g, "\\$1");
+}
+
+function wrapLine(value: string, width = 104) {
+  const words = value.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    if (!line) line = word;
+    else if ((line + " " + word).length <= width) line += " " + word;
+    else {
+      lines.push(line);
+      line = word;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [""];
+}
+
+function createSimplePdf(lines: string[]) {
+  const pageLineLimit = 50;
+  const pages: string[][] = [];
+  for (let index = 0; index < lines.length; index += pageLineLimit) pages.push(lines.slice(index, index + pageLineLimit));
+  if (!pages.length) pages.push(["No verification rows found."]);
+
+  const objects: string[] = [];
+  const pageObjectIds = pages.map((_, index) => 4 + index * 2);
+  const fontObjectId = 3;
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[2] = "<< /Type /Pages /Kids [" + pageObjectIds.map((id) => id + " 0 R").join(" ") + "] /Count " + pages.length + " >>";
+  objects[fontObjectId] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+
+  pages.forEach((pageLines, pageIndex) => {
+    const pageObjectId = pageObjectIds[pageIndex];
+    const contentObjectId = pageObjectId + 1;
+    const drawingLines = pageLines.flatMap((line, index) => index ? ["T*", "(" + escapePdfText(line) + ") Tj"] : ["(" + escapePdfText(line) + ") Tj"]);
+    const stream = ["BT", "/F1 8 Tf", "42 800 Td", "11 TL", ...drawingLines, "ET"].join("\n");
+    objects[pageObjectId] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 842] /Resources << /Font << /F1 " + fontObjectId + " 0 R >> >> /Contents " + contentObjectId + " 0 R >>";
+    objects[contentObjectId] = "<< /Length " + stream.length + " >>\nstream\n" + stream + "\nendstream";
+  });
+
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [0];
+  for (let index = 1; index < objects.length; index += 1) {
+    offsets[index] = pdf.length;
+    pdf += index + " 0 obj\n" + objects[index] + "\nendobj\n";
+  }
+  const xrefOffset = pdf.length;
+  pdf += "xref\n0 " + objects.length + "\n0000000000 65535 f \n";
+  for (let index = 1; index < objects.length; index += 1) pdf += String(offsets[index]).padStart(10, "0") + " 00000 n \n";
+  pdf += "trailer\n<< /Size " + objects.length + " /Root 1 0 R >>\nstartxref\n" + xrefOffset + "\n%%EOF";
+  return new Uint8Array(Array.from(pdf, (character) => character.charCodeAt(0)));
+}
+
+function verificationPdfLines(result: VerificationResponse) {
+  const lines = [
+    "HEFAMAA Facility Verification Report",
+    "Generated: " + new Date().toLocaleString(),
+    "Total names checked: " + result.summary.total,
+    "Verified: " + result.summary.verified,
+    "Not found: " + result.summary.notFound,
+    "Live portal checks: " + result.summary.livePortalChecked,
+    "",
+    "Verification results",
+  ];
+
+  result.rows.forEach((row, index) => {
+    const primary = (index + 1) + ". " + row.facilityNameFromDocument + " | Result: " + row.finalResult + " | Confidence: " + Math.round(row.confidence * 100) + "%";
+    const secondary = "Sheet: " + row.foundInGoogleSheet + " | Cache: " + row.foundInPortalCache + " | Live Portal: " + row.foundInLivePortal;
+    const match = "Matched: " + (row.matchedFacilityName || "-") + " | Category: " + (row.category || "-") + " | HEF Number: " + (row.hefNumber || "-");
+    const notes = "Notes: " + (row.notes || "-");
+    lines.push(...wrapLine(primary), ...wrapLine(secondary), ...wrapLine(match), ...wrapLine(notes), "");
+  });
+
+  if (result.warnings?.length) {
+    lines.push("Document warnings");
+    for (const warning of result.warnings) lines.push(...wrapLine("- " + warning));
+  }
+
+  return lines;
+}
+
 function Stat({ label, value, tone = "blue" }: { label: string; value: number | string; tone?: "blue" | "green" | "red" | "slate" }) {
   const tones = {
     blue: "border-blue-100 bg-blue-50 text-blue-900",
@@ -54,6 +144,24 @@ export default function FacilityVerificationPage() {
 
   const rows = result?.rows ?? [];
   const tableRows = useMemo(() => rows, [rows]);
+
+  function exportPdf() {
+    if (!result || !result.rows.length) {
+      setMessage("Run verification first before exporting the PDF report.");
+      return;
+    }
+
+    const pdf = createSimplePdf(verificationPdfLines(result));
+    const blob = new Blob([pdf], { type: "application/pdf" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "hefamaa-facility-verification-" + exportTimestamp() + ".pdf";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
 
   async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -126,8 +234,12 @@ export default function FacilityVerificationPage() {
             </div>
 
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-              <div className="border-b border-slate-200 px-5 py-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
                 <h2 className="text-[17px] font-black text-slate-950">Verification Report</h2>
+                <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 text-[12px] font-black text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50" disabled={!result?.rows.length} onClick={exportPdf} type="button">
+                  <Download className="h-4 w-4" />
+                  Export PDF
+                </button>
               </div>
               <div className="overflow-x-auto">
                 <table className="min-w-[1100px] w-full text-left text-[12px]">
