@@ -45,6 +45,11 @@ type PortalAnalytics = {
 };
 
 type WorkbookReportSummary = {
+  dataSourceLabel?: string;
+  fileName?: string;
+  mimeType?: string;
+  readOnly?: boolean;
+  sourceMode?: "google_sheet" | "excel_xlsx";
   totalFacilities: number;
   totalCategories: number;
   incompleteRecords: number;
@@ -252,6 +257,11 @@ export default function DashboardPage() {
             <p className="mt-1 text-[14px] text-slate-600">
               Live HEFAMAA workbook overview and database assistant
             </p>
+            {summary?.sourceMode ? (
+              <span className="mt-3 inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.08em] text-blue-700">
+                Data Source: {summary.dataSourceLabel ?? (summary.sourceMode === "excel_xlsx" ? "Excel File Mode" : "Google Sheet Mode")}{summary.readOnly ? " - Read Only" : ""}
+              </span>
+            ) : null}
           </div>
           <button
             className="flex h-10 items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-[13px] font-bold text-slate-700 shadow-sm disabled:cursor-not-allowed disabled:text-slate-400"

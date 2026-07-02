@@ -18,12 +18,17 @@ export async function GET() {
   console.log("[/api/sheets/tabs] started");
 
   try {
-    const { tabs } = await readLightweightTabs();
+    const result = await readLightweightTabs();
     return NextResponse.json({
       success: true,
       ok: true,
-      data: tabs,
-      tabs,
+      data: result.tabs,
+      fileName: result.fileName,
+      mimeType: result.mimeType,
+      readOnly: result.readOnly,
+      sourceMode: result.sourceMode,
+      spreadsheetTitle: result.spreadsheetTitle,
+      tabs: result.tabs,
     });
   } catch (error) {
     console.error("[/api/sheets/tabs] failed", error);

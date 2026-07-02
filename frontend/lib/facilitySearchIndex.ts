@@ -1,4 +1,4 @@
-import { nonEmptyRows, readLightweightTabs, readLimitedSheet } from "@/lib/lightweightSheets";
+import { nonEmptyRows, readLimitedWorkbook } from "@/lib/lightweightSheets";
 
 export type FacilitySearchResult = {
   source: "active" | "old";
@@ -100,11 +100,10 @@ function rowFieldText(row: Record<string, string>, category: string) {
 }
 
 async function buildIndex() {
-  const { tabs } = await readLightweightTabs();
+  const workbook = await readLimitedWorkbook(maxRows());
   const rows: IndexedFacilityRow[] = [];
-  for (const tab of tabs) {
-    if (!tab.title) continue;
-    const sheet = await readLimitedSheet(tab.title, maxRows());
+  for (const sheet of workbook.sheets) {
+    if (!sheet.title) continue;
     nonEmptyRows(sheet.rows).forEach((row, index) => {
       const fieldText = rowFieldText(row, sheet.title);
       const hefNo = valueFor(row, aliases.hefNo);

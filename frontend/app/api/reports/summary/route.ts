@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { nonEmptyRows, readLightweightTabs, readLimitedSheet } from "@/lib/lightweightSheets";
+import { nonEmptyRows, readLimitedWorkbook } from "@/lib/lightweightSheets";
 
 export const runtime = "nodejs";
 
@@ -63,8 +63,9 @@ export async function GET() {
     }
 
     const generatedAt = new Date().toISOString();
-    const { tabs } = await readLightweightTabs();
     const rowLimit = maxRows();
+    const workbook = await readLimitedWorkbook(rowLimit);
+    const tabs = workbook.tabs;
     let totalFacilities = 0;
     let incompleteRecords = 0;
     const lgaCounts = new Map<string, number>();
@@ -73,7 +74,8 @@ export async function GET() {
 
     for (const tab of tabs) {
       if (!tab.title) continue;
-      const sheet = await readLimitedSheet(tab.title, rowLimit);
+      const sheet = workbook.sheets.find((item) => item.title === tab.title);
+      if (!sheet) continue;
       const rows = nonEmptyRows(sheet.rows);
       const missing = rows.filter(isIncomplete).length;
       totalFacilities += rows.length;
@@ -87,7 +89,12 @@ export async function GET() {
     }
 
     const payload = {
-      source: "google-sheets-limited",
+      source: workbook.sourceMode === "excel_xlsx" ? "excel-xlsx-limited" : "google-sheets-limited",
+      sourceMode: workbook.sourceMode,
+      dataSourceLabel: workbook.sourceMode === "excel_xlsx" ? "Excel File Mode" : "Google Sheet Mode",
+      fileName: workbook.fileName,
+      mimeType: workbook.mimeType,
+      readOnly: workbook.readOnly,
       generatedAt,
       rowLimit,
       totalFacilities,
@@ -103,7 +110,7 @@ export async function GET() {
         possibleDuplicateKeys: 0,
       },
       cache: {
-        source: "google-sheets-limited",
+        source: workbook.sourceMode === "excel_xlsx" ? "excel-xlsx-limited" : "google-sheets-limited",
         generatedAt,
         expiresAt: new Date(Date.now() + ttlMs()).toISOString(),
       },

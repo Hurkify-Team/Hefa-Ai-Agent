@@ -6,7 +6,6 @@ export const runtime = "nodejs";
 
 const GOOGLE_SHEETS_MIME_TYPE = "application/vnd.google-apps.spreadsheet";
 const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-const xlsxError = "The configured file is an Excel (.xlsx) file. Please convert it to a Google Spreadsheet.";
 
 export async function GET() {
   console.log("[/api/sheets/diagnostics] started");
@@ -16,6 +15,8 @@ export async function GET() {
   let spreadsheetTitle = "";
   let isGoogleSpreadsheet = false;
   let canReadSheets = false;
+  let sourceMode: "google_sheet" | "excel_xlsx" | "unsupported" = "unsupported";
+  let readOnly = true;
 
   try {
     if (!config.configured) {
@@ -27,6 +28,8 @@ export async function GET() {
         spreadsheetTitle,
         isGoogleSpreadsheet,
         canReadSheets,
+        sourceMode,
+        readOnly,
         sheetCount: 0,
         tabs: [],
         serviceAccountEmailPresent: config.serviceAccountEmailPresent,
@@ -40,8 +43,10 @@ export async function GET() {
     mimeType = metadata.mimeType;
     spreadsheetTitle = metadata.name;
     isGoogleSpreadsheet = mimeType === GOOGLE_SHEETS_MIME_TYPE;
+    sourceMode = mimeType === XLSX_MIME_TYPE ? "excel_xlsx" : isGoogleSpreadsheet ? "google_sheet" : "unsupported";
+    readOnly = sourceMode !== "google_sheet";
 
-    if (mimeType === XLSX_MIME_TYPE) {
+    if (!isGoogleSpreadsheet && mimeType !== XLSX_MIME_TYPE) {
       return NextResponse.json(
         {
           success: false,
@@ -51,26 +56,8 @@ export async function GET() {
           spreadsheetTitle,
           isGoogleSpreadsheet: false,
           canReadSheets: false,
-          sheetCount: 0,
-          tabs: [],
-          serviceAccountEmailPresent: config.serviceAccountEmailPresent,
-          privateKeyPresent: config.privateKeyPresent,
-          error: xlsxError,
-        },
-        { status: 400 },
-      );
-    }
-
-    if (!isGoogleSpreadsheet) {
-      return NextResponse.json(
-        {
-          success: false,
-          configured: true,
-          fileId,
-          mimeType,
-          spreadsheetTitle,
-          isGoogleSpreadsheet: false,
-          canReadSheets: false,
+          sourceMode,
+          readOnly,
           sheetCount: 0,
           tabs: [],
           serviceAccountEmailPresent: config.serviceAccountEmailPresent,
@@ -92,6 +79,9 @@ export async function GET() {
       spreadsheetTitle,
       isGoogleSpreadsheet,
       canReadSheets,
+      sourceMode: tabsResult.sourceMode,
+      readOnly: tabsResult.readOnly,
+      fileName: tabsResult.fileName,
       sheetCount: tabsResult.tabs.length,
       tabs: tabsResult.tabs,
       serviceAccountEmailPresent: config.serviceAccountEmailPresent,
@@ -108,6 +98,8 @@ export async function GET() {
         spreadsheetTitle,
         isGoogleSpreadsheet,
         canReadSheets,
+        sourceMode,
+        readOnly,
         sheetCount: 0,
         tabs: [],
         serviceAccountEmailPresent: config.serviceAccountEmailPresent,
