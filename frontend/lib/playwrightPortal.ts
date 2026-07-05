@@ -124,6 +124,7 @@ type PortalScanSpeedAnalytics = {
 
 type PortalScanProgress = {
   completedAt: string | null;
+  keepAwakeActive?: boolean;
   openTabsCount?: number;
   scanId?: string | null;
   stopRequested?: boolean;
@@ -365,6 +366,7 @@ const portalRuntime: PortalRuntimeStore =
       currentFacilityName: null,
       detailTotal: 0,
       failedDetails: 0,
+      keepAwakeActive: false,
       lastCapturedFacilityName: null,
       portalReportedRecords: null,
       recentEvents: [],
@@ -398,6 +400,7 @@ portalRuntime.startupMetrics ??= {
 };
 portalRuntime.closingSession ??= null;
 portalRuntime.keepAwakePid ??= undefined;
+portalRuntime.scanProgress.keepAwakeActive ??= Boolean(portalRuntime.keepAwakePid && isProcessRunning(portalRuntime.keepAwakePid));
 portalRuntime.openingSession ??= null;
 portalRuntime.scanPromise ??= null;
 portalRuntime.scanController ??= {
@@ -731,22 +734,37 @@ function portalKeepAwakeEnabled() {
 }
 
 function startPortalScanKeepAwake(mode: PortalScanMode) {
-  if (mode !== "full" || !portalKeepAwakeEnabled()) return;
+  if ((mode !== "full" && mode !== "fresh_full_scan") || !portalKeepAwakeEnabled()) {
+    updatePortalScanProgress({ keepAwakeActive: false });
+    return;
+  }
 
   const existingPid = portalRuntime.keepAwakePid;
-  if (existingPid && isProcessRunning(existingPid)) return;
+  if (existingPid && isProcessRunning(existingPid)) {
+    updatePortalScanProgress({ keepAwakeActive: true });
+    return;
+  }
+  portalRuntime.keepAwakePid = undefined;
 
   try {
-    // A full detail scan is long-running. Keep macOS awake so screen lock or idle sleep
+    // A detail scan is long-running. Keep macOS awake so screen lock or idle sleep
     // does not freeze Chromium/CDP midway through a resumable capture.
     const child = spawn("caffeinate", ["-dimsu"], { detached: true, stdio: "ignore" });
     child.unref();
     portalRuntime.keepAwakePid = child.pid;
+    updatePortalScanProgress({ keepAwakeActive: Boolean(child.pid) });
+    child.once("exit", () => {
+      if (portalRuntime.keepAwakePid === child.pid) {
+        portalRuntime.keepAwakePid = undefined;
+        updatePortalScanProgress({ keepAwakeActive: false });
+      }
+    });
     appendPortalScanEvent({
-      message: "Mac keep-awake guard started for Full Detail Scan.",
+      message: mode === "fresh_full_scan" ? "Mac keep-awake guard started for Fresh Full Scan." : "Mac keep-awake guard started for Full Detail Scan.",
       status: "info",
     });
   } catch (error) {
+    updatePortalScanProgress({ keepAwakeActive: false });
     appendPortalScanEvent({
       error: scanErrorMessage(error),
       message: "Unable to start the macOS keep-awake guard. The scan can continue, but system sleep may pause it.",
@@ -758,8 +776,13 @@ function startPortalScanKeepAwake(mode: PortalScanMode) {
 async function stopPortalScanKeepAwake() {
   const pid = portalRuntime.keepAwakePid;
   portalRuntime.keepAwakePid = undefined;
+  updatePortalScanProgress({ keepAwakeActive: false });
   if (!pid) return;
   await terminateProcess(pid, 1_500);
+  appendPortalScanEvent({
+    message: "Mac keep-awake guard stopped.",
+    status: "info",
+  });
 }
 
 async function persistPortalStorageState(session: PortalSession) {
@@ -4516,6 +4539,7 @@ export async function startPortalFacilityScan(input: { mode?: PortalScanMode; on
     detailTotal: 0,
     error: undefined,
     failedDetails: 0,
+    keepAwakeActive: false,
     lastCapturedFacilityName: null,
     message: mode === "fresh_full_scan" ? "Starting Fresh Full Scan from the beginning..." : mode === "full" ? "Starting full detail scan for latest valid facility records..." : "Starting quick portal scan...",
     phase: "starting",
@@ -4585,7 +4609,6 @@ export async function stopPortalFacilityScan() {
     stopRequested: true,
     stoppedAt: new Date().toISOString(),
   });
-  await stopPortalScanKeepAwake();
   appendPortalScanEvent({
     message: "Stop requested. Scan will stop after the current facility.",
     status: "info",

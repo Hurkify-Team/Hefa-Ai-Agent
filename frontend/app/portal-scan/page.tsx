@@ -987,6 +987,7 @@ export default function PortalScanPage() {
                   ["Facilities Cached", sessionStatus ? formatCount(sessionStatus.cachedFacilities) : "-"],
                   ["Current Facility", sessionStatus?.currentFacility || scanProgress?.currentFacilityName || "None"],
                   ["Scan Status", scanProgress?.stopRequested ? "Stop requested" : scanProgress?.status ?? "Idle"],
+                  ["Keep Awake", scanProgress?.keepAwakeActive ? "Active" : "Idle"],
                   ["Open Tabs", formatCount(scanProgress?.openTabsCount ?? 0)],
                   ["Last Activity", sessionStatus?.lastActivity ?? "-"],
                 ].map(([label, value]) => (
