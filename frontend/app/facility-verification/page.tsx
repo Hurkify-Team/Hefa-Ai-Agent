@@ -2,7 +2,7 @@
 
 import { safeFetchJson } from "@/lib/safeFetchJson";
 import { FormEvent, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Download, FileCheck2, Loader2, Upload, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Database, Download, FileCheck2, FileText, Loader2, Search, ShieldCheck, Upload, XCircle } from "lucide-react";
 
 import { AppShell } from "@/components/AppShell";
 
@@ -129,9 +129,33 @@ function Stat({ label, value, tone = "blue" }: { label: string; value: number | 
     blue: "border-blue-100 bg-blue-50 text-blue-900",
     green: "border-emerald-100 bg-emerald-50 text-emerald-900",
     red: "border-red-100 bg-red-50 text-red-900",
-    slate: "border-slate-200 bg-slate-50 text-slate-900",
+    slate: "border-slate-200 bg-white text-slate-900",
   };
-  return <div className={`rounded-2xl border p-4 ${tones[tone]}`}><p className="text-[11px] font-black uppercase tracking-[0.14em] opacity-70">{label}</p><p className="mt-2 text-[24px] font-black">{value}</p></div>;
+  return (
+    <div className={`rounded-2xl border p-4 shadow-sm ${tones[tone]}`}>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] opacity-70">{label}</p>
+      <p className="mt-2 text-[26px] font-semibold tracking-[-0.02em]">{value}</p>
+    </div>
+  );
+}
+
+function SourceStep({ icon: Icon, title, text }: { icon: typeof Database; title: string; text: string }) {
+  return (
+    <div className="rounded-2xl border border-blue-100 bg-white/85 p-4 shadow-sm">
+      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
+        <Icon className="h-5 w-5" />
+      </div>
+      <h3 className="mt-3 text-[14px] font-semibold text-slate-950">{title}</h3>
+      <p className="mt-1 text-[12px] font-medium leading-5 text-slate-500">{text}</p>
+    </div>
+  );
+}
+
+function YesNoBadge({ value }: { value: "Yes" | "No" }) {
+  if (value === "Yes") {
+    return <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Yes</span>;
+  }
+  return <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-500"><XCircle className="h-3.5 w-3.5" />No</span>;
 }
 
 export default function FacilityVerificationPage() {
@@ -144,6 +168,7 @@ export default function FacilityVerificationPage() {
 
   const rows = result?.rows ?? [];
   const tableRows = useMemo(() => rows, [rows]);
+  const canVerify = Boolean(text.trim() || file) && !isVerifying;
 
   function exportPdf() {
     if (!result || !result.rows.length) {
@@ -194,79 +219,99 @@ export default function FacilityVerificationPage() {
 
   return (
     <AppShell>
-      <section className="space-y-5 bg-[#f6f9ff] px-4 py-6 xl:px-6 2xl:px-7">
-        <div className="rounded-2xl border border-blue-900/10 bg-white p-5 shadow-[0_18px_45px_rgba(15,23,42,0.06)]">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-black uppercase tracking-[0.2em] text-blue-600">Facility Verification Intelligence</p>
-              <h1 className="mt-2 text-[28px] font-black tracking-[-0.03em] text-slate-950">Verify Facility Names</h1>
-              <p className="mt-1 max-w-3xl text-[14px] font-semibold leading-6 text-slate-600">Paste facility names or upload a text-based PDF/Word export. HEFAI checks Google Sheet first, portal cache second, and live portal only for unresolved names.</p>
+      <section className="min-h-screen space-y-6 bg-[#f5f8fc] px-4 py-6 text-slate-900 xl:px-6 2xl:px-8">
+        <div className="overflow-hidden rounded-[28px] border border-blue-100 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+          <div className="grid gap-6 p-6 lg:grid-cols-[1.2fr_0.8fr] lg:p-8">
+            <div className="min-w-0">
+              <div className="inline-flex items-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">
+                <ShieldCheck className="h-3.5 w-3.5" /> Facility Verification Intelligence
+              </div>
+              <h1 className="mt-4 text-[30px] font-semibold tracking-[-0.03em] text-slate-950 lg:text-[36px]">Verify Facility Names</h1>
+              <p className="mt-3 max-w-3xl text-[14px] font-medium leading-6 text-slate-600">Validate pasted names or uploaded documents against the active workbook, portal cache, and the live HEFAMAA portal only when a record is unresolved. HEFAI never guesses a match.</p>
+              <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                <SourceStep icon={Database} title="Workbook First" text="Checks active Google Sheet or Excel workbook records before any live portal action." />
+                <SourceStep icon={FileText} title="Portal Cache" text="Uses stored portal scan records for fast confirmation where available." />
+                <SourceStep icon={Search} title="Live Fallback" text="Searches the live portal only for names not found in trusted local sources." />
+              </div>
             </div>
-            <FileCheck2 className="h-10 w-10 text-blue-600" />
+            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-500">Verification Status</p>
+                  <p className="mt-1 text-[20px] font-semibold text-slate-950">{isVerifying ? "Checking records" : result ? "Report ready" : "Ready to verify"}</p>
+                </div>
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-lg shadow-blue-600/20">
+                  {isVerifying ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileCheck2 className="h-5 w-5" />}
+                </div>
+              </div>
+              <div className="mt-5 grid grid-cols-2 gap-3">
+                <Stat label="Total" value={result?.summary.total ?? "-"} tone="slate" />
+                <Stat label="Verified" value={result?.summary.verified ?? "-"} tone="green" />
+                <Stat label="Not Found" value={result?.summary.notFound ?? "-"} tone="red" />
+                <Stat label="Live Checked" value={result?.summary.livePortalChecked ?? "-"} tone="blue" />
+              </div>
+            </div>
           </div>
         </div>
 
-        <form className="grid gap-5 xl:grid-cols-[0.85fr_1.15fr]" onSubmit={verify}>
-          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-[17px] font-black text-slate-950">Input</h2>
-            <textarea className="mt-4 min-h-[260px] w-full rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[13px] font-semibold leading-6 text-slate-800 outline-none focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-50" placeholder="Paste facility names, one per line" value={text} onChange={(event) => setText(event.target.value)} />
-            <label className="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-dashed border-blue-200 bg-blue-50/60 p-4 text-[13px] font-bold text-blue-800">
-              <span className="flex items-center gap-2"><Upload className="h-4 w-4" />{file ? file.name : "Upload PDF, Word, or text file"}</span>
+        <form className="grid gap-6 xl:grid-cols-[420px_1fr]" onSubmit={verify}>
+          <section className="rounded-[24px] border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-[18px] font-semibold text-slate-950">Verification Input</h2>
+                <p className="mt-1 text-[13px] font-medium text-slate-500">Paste names or upload a supported document.</p>
+              </div>
+              <Upload className="h-5 w-5 text-blue-600" />
+            </div>
+            <textarea className="mt-5 min-h-[280px] w-full resize-y rounded-2xl border border-slate-200 bg-slate-50 p-4 text-[13px] font-medium leading-6 text-slate-800 outline-none transition focus:border-blue-300 focus:bg-white focus:ring-4 focus:ring-blue-50" placeholder="Paste facility names, one per line" value={text} onChange={(event) => setText(event.target.value)} />
+            <label className="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-2xl border border-dashed border-blue-200 bg-blue-50/70 p-4 text-[13px] font-semibold text-blue-800 transition hover:border-blue-300 hover:bg-blue-50">
+              <span className="flex min-w-0 items-center gap-2"><Upload className="h-4 w-4 shrink-0" /><span className="truncate">{file ? file.name : "Upload PDF, Word, CSV, or text file"}</span></span>
+              <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-blue-700">Browse</span>
               <input className="hidden" type="file" accept=".txt,.csv,.pdf,.doc,.docx" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
             </label>
-            <label className="mt-4 flex items-center gap-3 text-[13px] font-bold text-slate-700">
-              <input className="h-4 w-4 accent-blue-600" checked={useLivePortal} type="checkbox" onChange={(event) => setUseLivePortal(event.target.checked)} />
-              Use live portal fallback for names not found in sheet/cache
+            <label className="mt-4 flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-4 text-[13px] font-medium text-slate-700">
+              <input className="mt-0.5 h-4 w-4 accent-blue-600" checked={useLivePortal} type="checkbox" onChange={(event) => setUseLivePortal(event.target.checked)} />
+              <span><span className="font-semibold text-slate-950">Use live portal fallback</span><br />Only unresolved names will be checked against the logged-in portal session.</span>
             </label>
-            <button className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-[13px] font-black text-white disabled:opacity-60" disabled={isVerifying || (!text.trim() && !file)} type="submit">
+            <button className="mt-5 flex h-12 w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 text-[13px] font-semibold text-white shadow-lg shadow-blue-600/20 transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60" disabled={!canVerify} type="submit">
               {isVerifying ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileCheck2 className="h-4 w-4" />}
-              {isVerifying ? "Verifying..." : "Run Verification"}
+              {isVerifying ? "Verifying facilities..." : "Run Verification"}
             </button>
-            {message ? <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[13px] font-semibold text-amber-900">{message}</p> : null}
+            {message ? <p className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-[13px] font-medium leading-5 text-amber-900">{message}</p> : null}
           </section>
 
           <section className="space-y-5">
-            <div className="grid gap-3 sm:grid-cols-4">
-              <Stat label="Total" value={result?.summary.total ?? "-"} tone="slate" />
-              <Stat label="Verified" value={result?.summary.verified ?? "-"} tone="green" />
-              <Stat label="Not Found" value={result?.summary.notFound ?? "-"} tone="red" />
-              <Stat label="Live Checked" value={result?.summary.livePortalChecked ?? "-"} tone="blue" />
-            </div>
-
-            {result?.rows.length ? (
-              <button className="flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 text-[13px] font-black text-white shadow-sm transition hover:bg-blue-700" onClick={exportPdf} type="button">
-                <Download className="h-4 w-4" />
-                Export Verification Result as PDF
-              </button>
-            ) : null}
-
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="rounded-[24px] border border-slate-200 bg-white shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
-                <h2 className="text-[17px] font-black text-slate-950">Verification Report</h2>
-                <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 text-[12px] font-black text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50" disabled={!result?.rows.length} onClick={exportPdf} type="button">
-                  <Download className="h-4 w-4" />
-                  Export PDF
+                <div>
+                  <h2 className="text-[18px] font-semibold text-slate-950">Verification Report</h2>
+                  <p className="mt-1 text-[13px] font-medium text-slate-500">Confirmed sources, matched identity, confidence, and notes.</p>
+                </div>
+                <button className="inline-flex h-10 items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 text-[12px] font-semibold text-blue-700 transition hover:border-blue-300 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50" disabled={!result?.rows.length} onClick={exportPdf} type="button">
+                  <Download className="h-4 w-4" /> Export PDF
                 </button>
               </div>
               <div className="overflow-x-auto">
-                <table className="min-w-[1100px] w-full text-left text-[12px]">
-                  <thead className="bg-slate-50 text-[11px] font-black uppercase tracking-[0.08em] text-slate-500">
+                <table className="w-full min-w-[1120px] text-left text-[12px]">
+                  <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
                     <tr>{["Facility Name From Document", "Google Sheet", "Portal Cache", "Live Portal", "Final Result", "Matched Facility Name", "Category", "HEF Number", "Confidence", "Notes"].map((head) => <th className="px-4 py-3" key={head}>{head}</th>)}</tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {tableRows.map((row, index) => (
-                      <tr className="align-top" key={row.facilityNameFromDocument + index}>
-                        <td className="px-4 py-3 font-black text-slate-950">{row.facilityNameFromDocument}</td>
-                        {[row.foundInGoogleSheet, row.foundInPortalCache, row.foundInLivePortal].map((value, valueIndex) => <td className="px-4 py-3" key={valueIndex}>{value === "Yes" ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-1 font-black text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Yes</span> : <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-1 font-black text-slate-500"><XCircle className="h-3.5 w-3.5" />No</span>}</td>)}
-                        <td className="px-4 py-3 font-black"><span className={row.finalResult === "Verified" ? "text-emerald-700" : "text-red-700"}>{row.finalResult}</span></td>
-                        <td className="px-4 py-3 font-semibold text-slate-800">{row.matchedFacilityName || "-"}</td>
-                        <td className="px-4 py-3 font-semibold text-slate-800">{row.category || "-"}</td>
-                        <td className="px-4 py-3 font-semibold text-slate-800">{row.hefNumber || "-"}</td>
-                        <td className="px-4 py-3 font-semibold text-slate-800">{Math.round(row.confidence * 100)}%</td>
-                        <td className="px-4 py-3 font-semibold text-slate-600">{row.notes || "-"}</td>
+                      <tr className="align-top transition hover:bg-blue-50/30" key={row.facilityNameFromDocument + index}>
+                        <td className="px-4 py-3 font-semibold text-slate-950">{row.facilityNameFromDocument}</td>
+                        <td className="px-4 py-3"><YesNoBadge value={row.foundInGoogleSheet} /></td>
+                        <td className="px-4 py-3"><YesNoBadge value={row.foundInPortalCache} /></td>
+                        <td className="px-4 py-3"><YesNoBadge value={row.foundInLivePortal} /></td>
+                        <td className="px-4 py-3"><span className={row.finalResult === "Verified" ? "inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700" : "inline-flex rounded-full bg-red-50 px-2.5 py-1 text-[11px] font-semibold text-red-700"}>{row.finalResult}</span></td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{row.matchedFacilityName || "-"}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{row.category || "-"}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{row.hefNumber || "-"}</td>
+                        <td className="px-4 py-3 font-medium text-slate-800">{Math.round(row.confidence * 100)}%</td>
+                        <td className="max-w-[280px] px-4 py-3 font-medium leading-5 text-slate-600">{row.notes || "-"}</td>
                       </tr>
                     ))}
-                    {!tableRows.length ? <tr><td className="px-4 py-8 text-center text-[13px] font-semibold text-slate-500" colSpan={10}><AlertTriangle className="mx-auto mb-2 h-6 w-6 text-slate-400" />No verification report yet.</td></tr> : null}
+                    {!tableRows.length ? <tr><td className="px-4 py-12 text-center text-[13px] font-medium text-slate-500" colSpan={10}><AlertTriangle className="mx-auto mb-2 h-6 w-6 text-slate-400" />No verification report yet. Add names or upload a document, then run verification.</td></tr> : null}
                   </tbody>
                 </table>
               </div>

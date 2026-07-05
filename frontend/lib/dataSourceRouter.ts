@@ -21,6 +21,7 @@ const PORTAL_INTENTS = new Set([
   "count_expired_accreditation",
   "list_expired_accreditation",
   "count_staff",
+  "bed_distribution",
   "recent_updates",
   "notification_targets",
   "notification_document_queried",
@@ -37,10 +38,10 @@ export function routeDataSources(intent: DetectedIntent, question: string): Know
   const lower = question.toLowerCase();
   const requested = new Set(intent.dataSources ?? []);
 
-  if (/portal|scan|scanned|accreditation|inspection|requirements?|status|workflow|staff|doctor|nurse|operating officer|professional in-charge/.test(lower)) {
+  if (/portal|scan|scanned|accreditation|inspection|requirements?|status|workflow|staff|doctor|nurse|operating officer|medical officer|professional in-charge|professional in charge|admission beds?|observation beds?|couches?/.test(lower)) {
     requested.add("portal_cache");
   }
-  if (/sheet|spreadsheet|google|database|hef\/no|hef no|facility code|missing fields?|duplicate|serial|s\/n/.test(lower)) {
+  if (/sheet|spreadsheet|google|database|hefa no|hef\/no|hef no|hefamaa no|hefa number|facility code|facility id|missing fields?|duplicate|serial|s\/n/.test(lower)) {
     requested.add("google_sheet");
   }
 

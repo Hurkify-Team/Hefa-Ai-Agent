@@ -3,7 +3,10 @@ import { routeDataSources, type KnowledgeDataSource } from "@/lib/dataSourceRout
 import { detectIntent, type DetectedIntent } from "@/lib/intentDetector";
 import { buildNotificationIntelligence } from "@/lib/notificationEngine";
 import { normalizeFacilityName, normalizeHeaderName, normalizeLGA } from "@/lib/normalizers";
-import { portalRowMatchesText, readPortalCacheRows, type PortalCacheRow } from "@/lib/portalCacheModel";
+import { readPortalCacheRows, type PortalCacheRow } from "@/lib/portalCacheModel";
+import { buildPortalWorkflowSummary, PORTAL_WORKFLOW_LABELS, type PortalWorkflowStatus } from "@/lib/portalWorkflow";
+import { searchFacilityIndex } from "@/lib/facilitySearchIndex";
+import { nonEmptyRows, readLimitedWorkbook } from "@/lib/lightweightSheets";
 import { getSourceAllSheetData, isWorkbookSourceConfigured, WORKBOOK_SOURCE_LABELS, type WorkbookSource } from "@/lib/workbookSources";
 import type { SheetRow } from "@/types/sheet";
 
@@ -43,9 +46,28 @@ const SHEET_FIELD_ALIASES = {
   contact: ["Contact", "Phone", "Phone Number", "Phone No", "Telephone"],
   email: ["Facility E-Mail", "Facility Email", "Email", "E-Mail", "E-MAIL"],
   facilityName: ["Facility Name", "FACILITY NAME", "Name", "Name of Facility", "FACILITY", "Facility"],
-  hefNo: ["HEF/NO", "HEF NO", "HEFAMAA NO", "HF NO", "REG NO", "Registration Number", "Facility Code", "FACILITY CODE"],
+  hefNo: ["HEF/NO", "HEF NO", "HEFA NO", "HEFAMAA NO", "HF NO", "HEFA Number", "HEFAMAA Number", "Facility Code", "FACILITY CODE", "Facility ID", "Registration Number"],
   lga: ["LGA", "Local Government"],
 };
+
+type BedType = "admissionBeds" | "observationBeds" | "couches";
+
+const BED_FIELD_ALIASES: Record<BedType, string[]> = {
+  admissionBeds: ["Admission Bed", "Admission Beds", "ADMISSION BEDS", "Admission Beds Count", "No of Admission Beds"],
+  observationBeds: ["Observation Bed", "Observation Beds", "OBSERVATION BEDS", "Observation Beds Count", "No of Observation Beds"],
+  couches: ["No of Couches", "Couches", "COUCHES", "Couch", "Number of Couches"],
+};
+
+const OPERATING_OFFICER_ALIASES = [
+  "Medical Professional in Charge",
+  "Medical Professional In-Charge",
+  "Medical Officer in Charge",
+  "Operating Officer",
+  "Officer in Charge",
+  "Professional in Charge",
+];
+
+const FACILITY_CODE_ALIASES = SHEET_FIELD_ALIASES.hefNo;
 
 function clean(value: unknown) {
   return String(value ?? "").replace(/\s+/g, " ").trim();
@@ -89,6 +111,12 @@ function rowToWorkbookKnowledge(source: WorkbookSource, category: string, row: S
 
 async function readWorkbookRows(source: WorkbookSource) {
   if (!isWorkbookSourceConfigured(source)) return [];
+
+  if (source === "active") {
+    const workbook = await readLimitedWorkbook(Number(process.env.HEFAI_KNOWLEDGE_MAX_ROWS ?? process.env.DASHBOARD_SUMMARY_MAX_ROWS ?? 5000));
+    return workbook.sheets.flatMap((sheet) => nonEmptyRows(sheet.rows).map((row, index) => rowToWorkbookKnowledge(source, sheet.title, row, index + 2)));
+  }
+
   const data = await getSourceAllSheetData(source);
   return Object.entries(data).flatMap(([category, sheet]) => sheet.rows.map((row, index) => rowToWorkbookKnowledge(source, category, row, index + 2)));
 }
@@ -127,14 +155,27 @@ function filterWorkbook(rows: WorkbookKnowledgeRow[], intent: DetectedIntent) {
   });
 }
 
+function facilityNameMatchesPortal(row: PortalCacheRow, query: string) {
+  const compactQuery = normalize(query).replace(/\s+/g, "");
+  const compactName = normalize(row.facility_name).replace(/\s+/g, "");
+  if (!compactQuery || !compactName) return false;
+  if (compactName.includes(compactQuery) || compactQuery.includes(compactName)) return true;
+
+  const generic = new Set(["clinic", "hospital", "laboratory", "lab", "facility", "centre", "center", "medical", "health"]);
+  const tokens = normalize(query).split(/\s+/).filter((token) => token.length > 2 && !generic.has(token));
+  if (tokens.length >= 2) return tokens.every((token) => normalize(row.facility_name).includes(token));
+  if (tokens.length === 1 && tokens[0].length >= 4) return normalize(row.facility_name).includes(tokens[0]);
+  return false;
+}
+
 function filterPortal(rows: PortalCacheRow[], intent: DetectedIntent) {
   const entity = intent.entities;
   return rows.filter((row) => {
     if (!categoryMatches(row.category, entity.category)) return false;
     if (!lgaMatches(row.lga, entity.lga)) return false;
     if (!statusMatches(row.registration_status, entity.status)) return false;
-    if (entity.facilityName && !portalRowMatchesText(row, entity.facilityName)) return false;
-    if (entity.hefNo && normalize(row.hef_no) !== normalize(entity.hefNo)) return false;
+    if (entity.facilityName && !facilityNameMatchesPortal(row, entity.facilityName)) return false;
+    if (entity.hefNo && normalize(portalFacilityCode(row)) !== normalize(entity.hefNo) && normalize(row.hef_no) !== normalize(entity.hefNo)) return false;
     return true;
   });
 }
@@ -176,6 +217,7 @@ function publicPortalRow(row: PortalCacheRow): Record<string, unknown> {
     Category: row.category,
     "Facility Name": row.facility_name,
     "HEF/NO / Portal ID": row.hef_no,
+    "Facility Code": portalFacilityCode(row),
     Address: row.address,
     LGA: row.lga,
     LCDA: row.lcda,
@@ -186,7 +228,51 @@ function publicPortalRow(row: PortalCacheRow): Record<string, unknown> {
     "Requirements Status": row.requirements_status,
     "Doctors Count": row.doctors_count,
     "Nurses Count": row.nurses_count,
+    "Operating Officer": portalOperatingOfficer(row) || null,
+    "Admission Beds": getBedValue(row, "admissionBeds").value,
+    "Observation Beds": getBedValue(row, "observationBeds").value,
+    Couches: getBedValue(row, "couches").value,
     "Captured At": row.captured_at,
+  };
+}
+
+
+function workflowStatusFromQuestion(question: string): PortalWorkflowStatus | null {
+  if (/document\s+quer|queried/i.test(question)) return "DOCUMENT_QUERY";
+  if (/upload\s+payment|upload\s+payment\/document/i.test(question)) return "UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING";
+  if (/payment\s+approved.*document|payment\s+approved\/document/i.test(question)) return "PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING";
+  if (/document\s+approved.*inspection|inspection\s+report\s+pending/i.test(question)) return "DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING";
+  if (/inspection\s+approval|inspection\s+report\s+upload/i.test(question)) return "INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING";
+  if (/final\s+approval/i.test(question)) return "FINAL_APPROVAL_PENDING";
+  return null;
+}
+
+function portalWorkflowAnswer(question: string, requiresList?: boolean) {
+  const workflow = buildPortalWorkflowSummary();
+  const status = workflowStatusFromQuestion(question);
+  if (status) {
+    const facilities = workflow.facilities.filter((facility) => facility.currentWorkflowStatus === status);
+    const rows = requiresList || /show|list|which|display|awaiting/i.test(question)
+      ? facilities.slice(0, 50).map((facility) => ({
+          "Facility Name": facility.facilityName,
+          "HEFA NO / Facility Code": facility.facilityCode,
+          Category: facility.category,
+          LGA: facility.lga,
+          "Current Workflow Status": facility.currentWorkflowStatusLabel,
+          "Last Activity Date": facility.lastActivityDate,
+          "Last Scan Date": facility.lastScanDate,
+        }))
+      : [];
+    return {
+      answer: facilities.length.toLocaleString() + " facilit" + (facilities.length === 1 ? "y is" : "ies are") + " currently under " + PORTAL_WORKFLOW_LABELS[status] + " in the portal scan cache.",
+      rows,
+      summary: { status, count: facilities.length, source: workflow.source, lastScan: workflow.lastScan },
+    };
+  }
+  return {
+    answer: "I grouped the HEFAMAA portal cache by the six official workflow statuses.",
+    rows: Object.entries(workflow.statusCounts).map(([statusKey, count]) => ({ Status: PORTAL_WORKFLOW_LABELS[statusKey as PortalWorkflowStatus], Count: count })),
+    summary: { totalPortalRecords: workflow.totalPortalRecords, source: workflow.source, lastScan: workflow.lastScan },
   };
 }
 
@@ -294,6 +380,168 @@ function staffMetric(intent: DetectedIntent) {
   return { label: "doctors", reader: (row: PortalCacheRow) => row.doctors_count ?? 0 };
 }
 
+function portalStructuredObjects(row: PortalCacheRow) {
+  const data = row.structured_portal_data ?? {};
+  const objects: Array<Record<string, unknown>> = [];
+  for (const key of ["visibleFields", "formFields", "qaFields"] as const) {
+    const value = (data as Record<string, unknown>)[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) objects.push(value as Record<string, unknown>);
+  }
+  return objects;
+}
+
+function portalFieldValue(row: PortalCacheRow, aliases: string[]) {
+  const normalizedAliases = aliases.map(normalize);
+  for (const fields of portalStructuredObjects(row)) {
+    for (const [key, value] of Object.entries(fields)) {
+      const normalizedKey = normalize(key);
+      if (normalizedAliases.some((alias) => normalizedKey === alias || normalizedKey.includes(alias) || alias.includes(normalizedKey))) {
+        const cleaned = clean(value);
+        if (cleaned) return cleaned;
+      }
+    }
+  }
+
+  const lines = clean(row.raw_portal_text).split(/\n+/).map(clean).filter(Boolean);
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = normalize(lines[index]);
+    if (!normalizedAliases.some((alias) => line === alias || line.includes(alias))) continue;
+    const next = clean(lines[index + 1]);
+    if (next) return next;
+  }
+  return "";
+}
+
+function parseBedNumber(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return Math.max(0, Math.trunc(value));
+  const text = clean(value);
+  if (!text || /^(-|—|n\/?a|not applicable|nil|none|null)$/i.test(text)) return null;
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : null;
+}
+
+function getStructuredBedValue(row: PortalCacheRow, type: BedType) {
+  const direct = row[type];
+  if (typeof direct === "number") return direct;
+  const nested = row.bedDistribution?.[type];
+  if (typeof nested === "number") return nested;
+  const structured = row.structured_portal_data?.bedDistribution;
+  if (structured && typeof structured === "object" && !Array.isArray(structured)) {
+    const value = (structured as Record<string, unknown>)[type];
+    if (typeof value === "number") return value;
+  }
+  return null;
+}
+
+function getBedValue(row: PortalCacheRow, type: BedType) {
+  const structuredValue = getStructuredBedValue(row, type);
+  const value = structuredValue ?? parseBedNumber(portalFieldValue(row, BED_FIELD_ALIASES[type]));
+  return { missing: value === null, value };
+}
+
+function bedLabel(type: BedType) {
+  if (type === "admissionBeds") return "admission beds";
+  if (type === "observationBeds") return "observation beds";
+  return "couches";
+}
+
+function bedTypeFromField(field?: string | null): BedType | null {
+  const normalized = normalize(field);
+  if (normalized.includes("admission")) return "admissionBeds";
+  if (normalized.includes("observation")) return "observationBeds";
+  if (normalized.includes("couch")) return "couches";
+  return null;
+}
+
+function portalOperatingOfficer(row: PortalCacheRow) {
+  return portalFieldValue(row, OPERATING_OFFICER_ALIASES);
+}
+
+function portalFacilityCode(row: PortalCacheRow) {
+  return portalFieldValue(row, FACILITY_CODE_ALIASES) || clean(row.hef_no);
+}
+
+type BedDistributionFilters = { category?: string | null; facilityNameOrCode?: string | null; hefNo?: string | null; lcda?: string | null; lga?: string | null };
+
+function filterBedRows(rows: PortalCacheRow[], filters: BedDistributionFilters = {}) {
+  return rows.filter((row) => {
+    if (filters.category && !categoryMatches(row.category, filters.category)) return false;
+    if (filters.lga && !lgaMatches(row.lga, filters.lga)) return false;
+    if (filters.lcda && !normalize(row.lcda).includes(normalize(filters.lcda))) return false;
+    const lookup = filters.facilityNameOrCode || filters.hefNo;
+    if (lookup) {
+      const query = normalize(lookup);
+      const code = normalize(portalFacilityCode(row));
+      const hefNo = normalize(row.hef_no);
+      const name = normalize(row.facility_name);
+      if (!(name === query || name.includes(query) || code === query || code.includes(query) || hefNo === query || hefNo.includes(query))) return false;
+    }
+    return true;
+  });
+}
+
+export function getTotalBeds(type: BedType, rows: PortalCacheRow[] = readPortalCacheRows(), filters: BedDistributionFilters = {}) {
+  const filteredRows = filterBedRows(rows, filters);
+  let total = 0;
+  let missingFacilities = 0;
+  let facilitiesWithData = 0;
+  for (const row of filteredRows) {
+    const bed = getBedValue(row, type);
+    if (bed.value === null) {
+      missingFacilities += 1;
+      continue;
+    }
+    facilitiesWithData += 1;
+    total += bed.value;
+  }
+  return { facilities: filteredRows.length, facilitiesWithData, missingFacilities, total, type };
+}
+
+export function getBedsByLGA(type: BedType, lga?: string | null, rows: PortalCacheRow[] = readPortalCacheRows(), filters: Omit<BedDistributionFilters, "lga"> = {}) {
+  const groups = new Map<string, { facilities: number; facilitiesWithData: number; lga: string; missingFacilities: number; total: number }>();
+  for (const row of filterBedRows(rows, { ...filters, lga })) {
+    const key = clean(row.lga) || "Unknown";
+    const current = groups.get(key) ?? { facilities: 0, facilitiesWithData: 0, lga: key, missingFacilities: 0, total: 0 };
+    const bed = getBedValue(row, type);
+    current.facilities += 1;
+    if (bed.value === null) current.missingFacilities += 1;
+    else {
+      current.facilitiesWithData += 1;
+      current.total += bed.value;
+    }
+    groups.set(key, current);
+  }
+  return [...groups.values()].sort((a, b) => b.total - a.total || a.lga.localeCompare(b.lga));
+}
+
+export function getBedsForFacility(facilityNameOrCode: string, rows: PortalCacheRow[] = readPortalCacheRows()) {
+  const query = normalize(facilityNameOrCode);
+  if (!query) return null;
+  const exact = rows.find((row) => normalize(row.facility_name) === query || normalize(portalFacilityCode(row)) === query || normalize(row.hef_no) === query);
+  const partial = exact ?? rows.find((row) => normalize(row.facility_name).includes(query) || normalize(portalFacilityCode(row)).includes(query) || normalize(row.hef_no).includes(query));
+  if (!partial) return null;
+  const admission = getBedValue(partial, "admissionBeds");
+  const observation = getBedValue(partial, "observationBeds");
+  const couches = getBedValue(partial, "couches");
+  return {
+    row: partial,
+    admissionBeds: admission.value,
+    observationBeds: observation.value,
+    couches: couches.value,
+    missingFields: [admission.missing ? "admissionBeds" : "", observation.missing ? "observationBeds" : "", couches.missing ? "couches" : ""].filter(Boolean),
+  };
+}
+
+export function getBedDistributionSummary(filters: BedDistributionFilters & { type?: BedType | null } = {}) {
+  const rows = readPortalCacheRows();
+  if (filters.facilityNameOrCode || filters.hefNo) return { mode: "facility" as const, result: getBedsForFacility(filters.facilityNameOrCode || filters.hefNo || "", rows) };
+  const type = filters.type ?? "admissionBeds";
+  if (filters.lga || /by_lga/i.test(clean(filters.lga))) return { mode: "lga" as const, result: getBedsByLGA(type, filters.lga, rows, { category: filters.category, facilityNameOrCode: filters.facilityNameOrCode, hefNo: filters.hefNo, lcda: filters.lcda }), type };
+  return { mode: "total" as const, result: getTotalBeds(type, rows, filters), type };
+}
+
 function detailAnswerFromRows(question: string, rows: { portal: PortalCacheRow[]; workbook: WorkbookKnowledgeRow[] }, intent: DetectedIntent) {
   const field = intent.entities.field;
   const portal = rows.portal[0];
@@ -312,7 +560,11 @@ function detailAnswerFromRows(question: string, rows: { portal: PortalCacheRow[]
       address: ["address", portal.address],
       contact: ["phone/contact", portal.contact],
       email: ["email", portal.email],
-      medical_professional_in_charge: ["operating officer / medical professional in-charge", portal.structured_portal_data?.visibleFields && typeof portal.structured_portal_data.visibleFields === "object" ? (portal.structured_portal_data.visibleFields as Record<string, unknown>)["Medical Professional In-Charge"] : portal.owner_name],
+      operating_officer: ["operating officer / medical professional in charge", portalOperatingOfficer(portal)],
+      medical_professional_in_charge: ["operating officer / medical professional in charge", portalOperatingOfficer(portal)],
+      admission_beds: ["admission beds", getBedValue(portal, "admissionBeds").value],
+      observation_beds: ["observation beds", getBedValue(portal, "observationBeds").value],
+      couches: ["couches", getBedValue(portal, "couches").value],
       owner_name: ["owner/proprietor", portal.owner_name],
       registration_status: ["portal status", portal.registration_status],
       doctors_count: ["doctor count", portal.doctors_count],
@@ -358,7 +610,12 @@ export async function answerQuestion(input: KnowledgeAnswerInput): Promise<Knowl
 
   if (sources.includes("google_sheet")) {
     try {
-      workbookRows = filterWorkbook(await readAllWorkbookRows(), intent);
+      if (intent.entities.hefNo) {
+        const search = await searchFacilityIndex(intent.entities.hefNo, 10);
+        workbookRows = search.results.map((row) => rowToWorkbookKnowledge(row.source, row.category, row.row, row.rowNumber));
+      } else {
+        workbookRows = filterWorkbook(await readAllWorkbookRows(), intent);
+      }
       sourceStatus.push({ label: "HEFAMAA Active + Old Databases", source: "google_sheet", status: "ok", summary: { rows: workbookRows.length } });
     } catch (error) {
       sourceStatus.push({ label: "HEFAMAA Active + Old Databases", source: "google_sheet", status: "error", summary: { error: error instanceof Error ? error.message : "Sheet lookup failed" } });
@@ -380,9 +637,15 @@ export async function answerQuestion(input: KnowledgeAnswerInput): Promise<Knowl
 
   switch (intent.intent) {
     case "notification_document_queried":
+    case "notification_final_approval_pending": {
+      const result = portalWorkflowAnswer(input.question, intent.requiresList);
+      answer = result.answer;
+      rows = result.rows;
+      Object.assign(summary, result.summary);
+      break;
+    }
     case "notification_reminders_today":
     case "notification_hefamaa_action":
-    case "notification_final_approval_pending":
     case "notification_overdue_renewal":
     case "notification_stale_cache":
     case "notification_changed_status": {
@@ -457,6 +720,39 @@ export async function answerQuestion(input: KnowledgeAnswerInput): Promise<Knowl
       const count = portalRows.reduce((sum, row) => sum + metric.reader(row), 0);
       answer = "The matching portal cache records contain " + count.toLocaleString() + " " + metric.label + ".";
       summary.count = count;
+      break;
+    }
+    case "bed_distribution": {
+      const type = bedTypeFromField(intent.entities.field) ?? "admissionBeds";
+      if (intent.entities.facilityName || intent.entities.hefNo) {
+        const lookup = intent.entities.facilityName || intent.entities.hefNo || "";
+        const bedResult = getBedsForFacility(lookup, portalRows.length ? portalRows : readPortalCacheRows());
+        if (!bedResult) {
+          answer = "I could not find a portal cache record for " + lookup + ". Run Full Detail Scan or verify the facility name/code, then try again.";
+          rows = [];
+          summary.lookup = lookup;
+        } else {
+          const name = bedResult.row.facility_name || lookup;
+          const observationText = bedResult.observationBeds === null ? "not captured" : bedResult.observationBeds.toLocaleString();
+          const couchesText = bedResult.couches === null ? "not captured" : bedResult.couches.toLocaleString();
+          const admissionText = bedResult.admissionBeds === null ? "not captured" : bedResult.admissionBeds.toLocaleString();
+          answer = name + " has " + observationText + " observation beds, " + couchesText + " couches, and " + admissionText + " admission beds recorded." + (bedResult.missingFields.length ? " Some bed fields are missing in the captured portal data; missing values are not treated as 0." : "");
+          rows = [publicPortalRow(bedResult.row)];
+          Object.assign(summary, bedResult);
+        }
+      } else if (intent.entities.lga || /grouped by lga|by lga|each local government|by local government/i.test(input.question)) {
+        const grouped = getBedsByLGA(type, intent.entities.lga, portalRows.length ? portalRows : readPortalCacheRows(), { category: intent.entities.category, lcda: intent.entities.lcda });
+        rows = grouped.slice(0, 50).map((row) => ({ LGA: row.lga, [bedLabel(type)]: row.total, Facilities: row.facilities, "Missing Bed Data": row.missingFacilities }));
+        const first = grouped[0];
+        answer = intent.entities.lga && first
+          ? intent.entities.lga + " LGA has " + first.total.toLocaleString() + " " + bedLabel(type) + " across " + first.facilities.toLocaleString() + " scanned facilities." + (first.missingFacilities ? " Some facilities have missing bed data." : "")
+          : "I grouped " + bedLabel(type) + " by LGA across the portal cache. Showing " + rows.length.toLocaleString() + " LGA group(s)." + (grouped.some((row) => row.missingFacilities > 0) ? " Some facilities have missing bed data." : "");
+        summary.groups = grouped.length;
+      } else {
+        const total = getTotalBeds(type, portalRows.length ? portalRows : readPortalCacheRows(), { category: intent.entities.category, lcda: intent.entities.lcda, lga: intent.entities.lga });
+        answer = "There are " + total.total.toLocaleString() + " " + bedLabel(type) + " recorded across " + total.facilities.toLocaleString() + " scanned facilities." + (total.missingFacilities ? " Note: " + total.missingFacilities.toLocaleString() + " facilities have missing " + bedLabel(type) + " data." : "");
+        Object.assign(summary, total);
+      }
       break;
     }
     case "recent_updates": {

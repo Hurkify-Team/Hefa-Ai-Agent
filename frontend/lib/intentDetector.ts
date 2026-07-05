@@ -16,6 +16,7 @@ export const supportedIntentSchema = z.enum([
   "count_expired_accreditation",
   "list_expired_accreditation",
   "count_staff",
+  "bed_distribution",
   "compare_categories",
   "duplicate_check",
   "recent_updates",
@@ -95,6 +96,8 @@ function detectLga(question: string) {
 
 function detectFacilityName(question: string) {
   const patterns = [
+    /\bdoes\s+(.+?)\s+(?:have|has|record|recorded)\b/i,
+    /\bfor\s+(.+?)\s+(?:have|has|record|recorded)\b/i,
     /\b(?:for|of|about|called|named)\s+(.+?)\??$/i,
     /\bfacility\s+(.+?)\??$/i,
   ];
@@ -107,8 +110,11 @@ function detectFacilityName(question: string) {
 
 function detectField(question: string) {
   const text = question.toLowerCase();
-  if (/operating officer|professional in-charge|professional in charge|officer in charge/.test(text)) return "medical_professional_in_charge";
-  if (/hef\/?no|hef no|hefamaa number|facility code/.test(text)) return "hef_no";
+  if (/medical professional in charge|medical professional in-charge|medical officer in charge|operating officer|professional in-charge|professional in charge|officer in charge/.test(text)) return "operating_officer";
+  if (/admission beds?/.test(text)) return "admission_beds";
+  if (/observation beds?/.test(text)) return "observation_beds";
+  if (/no of couches|couches?/.test(text)) return "couches";
+  if (/hefa\s*no|hef\/?no|hef no|hefamaa no|hefamaa number|hefa number|facility code|facility id/.test(text)) return "hef_no";
   if (/address|location|located/.test(text)) return "address";
   if (/phone|contact|telephone/.test(text)) return "contact";
   if (/email|e-mail/.test(text)) return "email";
@@ -123,10 +129,11 @@ function baseIntent(question: string, memory?: ConversationMemory): DetectedInte
   const lower = question.toLowerCase();
   const useMemoryContext = shouldUseMemoryContext(question);
   const explicitCategory = detectCategory(question);
-  const explicitLga = detectLga(question);
+  const field = detectField(question);
+  const bedLocation = field && /admission_beds|observation_beds|couches/.test(field) ? clean(question.match(/\bin\s+([a-z][a-z\s-]+?)\??$/i)?.[1] ?? "") || null : null;
+  const explicitLga = detectLga(question) ?? bedLocation;
   const category = explicitCategory ?? (useMemoryContext ? memory?.lastCategory : null) ?? null;
   const lga = explicitLga ?? (useMemoryContext ? memory?.lastLGA : null) ?? null;
-  const field = detectField(question);
   let intent: DetectedIntent["intent"] = "unknown";
   let sources: DetectedIntent["dataSources"] = [];
 
@@ -166,6 +173,9 @@ function baseIntent(question: string, memory?: ConversationMemory): DetectedInte
   } else if (/expired accreditation|expired licence|expired license/.test(lower)) {
     intent = /\b(list|show|which|who)\b/.test(lower) ? "list_expired_accreditation" : "count_expired_accreditation";
     sources = ["portal_cache"];
+  } else if (field === "admission_beds" || field === "observation_beds" || field === "couches") {
+    intent = "bed_distribution";
+    sources = ["portal_cache"];
   } else if (/\bdoctor|nurse|staff|complement\b/.test(lower) && /how many|count|total|number/.test(lower)) {
     intent = "count_staff";
     sources = ["portal_cache"];
@@ -195,14 +205,19 @@ function baseIntent(question: string, memory?: ConversationMemory): DetectedInte
         : /approved/i.test(question) ? "approved"
           : null;
 
+  const detectedFacilityName = detectFacilityName(question);
+  const isBedField = field === "admission_beds" || field === "observation_beds" || field === "couches";
+  const shouldIgnoreBedFacilityName = isBedField && !/\bdoes\b/i.test(question) && (/\b(total|across all|by lga|by local government|grouped by|number of)\b/i.test(question) || Boolean(lga));
+  const shouldIgnoreCodeFacilityName = field === "hef_no";
+
   return {
     intent,
     entities: {
       category,
       lga,
       lcda: null,
-      facilityName: detectFacilityName(question) ?? (useMemoryContext ? memory?.lastFacilityName : null) ?? null,
-      hefNo: clean(question.match(/\b(?:hef\/?no|hef no|hefamaa number|facility code)\s*[:#-]?\s*([a-z0-9/-]+)/i)?.[1] ?? "") || null,
+      facilityName: shouldIgnoreBedFacilityName || shouldIgnoreCodeFacilityName ? null : detectedFacilityName ?? (useMemoryContext ? memory?.lastFacilityName : null) ?? null,
+      hefNo: clean(question.match(/\b(?:hefa\s*no|hef\/?no|hef no|hefamaa no|hefamaa number|hefa number|facility code|facility id)\s*[:#-]?\s*([a-z0-9/-]+)/i)?.[1] ?? "") || null,
       status,
       dateRange: clean(question.match(/\b(20\d{2}|today|yesterday|this week|this month|this year|last week|last month)\b/i)?.[1] ?? "") || null,
       field,
@@ -235,7 +250,7 @@ async function geminiDetect(question: string, memory?: ConversationMemory): Prom
     const prompt = [
       "You are the HEFAI intent detector for HEFAMAA facility data questions.",
       "Return strict JSON only. Do not answer the user.",
-      "Supported intents: count_facilities, list_facilities, search_facility, facility_details, count_by_category, count_by_lga, count_missing_fields, count_pending_requirements, list_pending_requirements, count_expired_accreditation, list_expired_accreditation, count_staff, compare_categories, duplicate_check, recent_updates, notification_targets, notification_document_queried, notification_reminders_today, notification_hefamaa_action, notification_final_approval_pending, notification_overdue_renewal, notification_stale_cache, notification_changed_status, generate_report, unknown.",
+      "Supported intents: count_facilities, list_facilities, search_facility, facility_details, count_by_category, count_by_lga, count_missing_fields, count_pending_requirements, list_pending_requirements, count_expired_accreditation, list_expired_accreditation, count_staff, bed_distribution, compare_categories, duplicate_check, recent_updates, notification_targets, notification_document_queried, notification_reminders_today, notification_hefamaa_action, notification_final_approval_pending, notification_overdue_renewal, notification_stale_cache, notification_changed_status, generate_report, unknown.",
       "Use dataSources google_sheet for spreadsheet/database questions and portal_cache for portal scan/workflow/status/accreditation/staff questions. Use both when needed.",
       "Previous memory: " + JSON.stringify(memory ?? {}),
       "Question: " + question,

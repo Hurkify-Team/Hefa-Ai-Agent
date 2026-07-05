@@ -8,7 +8,8 @@ import { safeRequestJson } from "@/lib/safeJson";
 export const runtime = "nodejs";
 
 const scanSchema = z.object({
-  mode: z.enum(["quick", "full"]).default("quick"),
+  mode: z.enum(["quick", "full", "fresh_full_scan"]).default("quick"),
+  onlyMissingBeds: z.boolean().optional(),
 });
 
 async function readPayload(request: Request) {
@@ -20,7 +21,7 @@ export async function POST(request: Request) {
   try {
     logMemory("/api/portal/scan start");
     const payload = await readPayload(request);
-    const result = await startPortalFacilityScan({ mode: payload.mode });
+    const result = await startPortalFacilityScan({ mode: payload.mode, onlyMissingBeds: payload.onlyMissingBeds });
     logMemory("/api/portal/scan end");
     return ok(result);
   } catch (error) {

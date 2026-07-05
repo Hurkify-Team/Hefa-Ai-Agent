@@ -11,6 +11,7 @@ export type LightweightPortalFacilityRecord = {
   index?: number;
   lastSeen?: string;
   normalizedStatus?: string;
+  observationBeds?: number | null;
   recordDate?: string | null;
   registrationStatus?: string;
   renewalYear?: number | null;
@@ -19,7 +20,10 @@ export type LightweightPortalFacilityRecord = {
 };
 
 export type LightweightPortalFacilityDetailRecord = {
+  admissionBeds?: number | null;
   applicationType?: string;
+  bedDistribution?: { admissionBeds?: number | null; observationBeds?: number | null; couches?: number | null };
+  couches?: number | null;
   bodyText?: string;
   cacheKey?: string;
   capturedAt?: string;
@@ -29,6 +33,7 @@ export type LightweightPortalFacilityDetailRecord = {
   formFields?: unknown[];
   hefamaaId?: string;
   normalizedStatus?: string;
+  observationBeds?: number | null;
   recordDate?: string | null;
   registrationStatus?: string;
   renewalYear?: number | null;

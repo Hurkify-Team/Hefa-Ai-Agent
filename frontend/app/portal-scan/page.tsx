@@ -12,7 +12,10 @@ import {
   FileSpreadsheet,
   FileText,
   Loader2,
+  RotateCcw,
   RefreshCw,
+  Save,
+  Trash2,
   Search,
   StopCircle,
   Table,
@@ -33,6 +36,8 @@ type PortalScanEvent = {
   hefamaaId?: string;
   id: string;
   message: string;
+  durationMs?: number;
+  attempt?: number;
   status: "capturing" | "captured" | "skipped" | "failed" | "info";
 };
 
@@ -49,21 +54,40 @@ type PortalFacilitySummary = {
   statusCounts: Record<string, number>;
   scanProgress: {
     completedAt: string | null;
+    openTabsCount?: number;
+    scanId?: string | null;
+    stopRequested?: boolean;
     currentFacilityHefamaaId?: string | null;
     currentFacilityName?: string | null;
     error?: string;
     detailTotal?: number;
     failedDetails?: number;
+    lastCaptureMs?: number | null;
     lastCapturedFacilityName?: string | null;
     message?: string;
     phase?: "starting" | "waiting_for_login" | "finding_facilities" | "indexing_list" | "capturing_details" | "completed";
     portalReportedRecords: number | null;
     recentEvents?: PortalScanEvent[];
-    scanMode?: "quick" | "full";
+    scanMode?: "quick" | "full" | "fresh_full_scan";
     scannedDetails?: number;
+    recapturedDetails?: number;
+    bedsCapturedCount?: number;
+    missingBedDataCount?: number;
+    onlyMissingBeds?: boolean;
     scannedPages: number;
     scannedRecords: number;
     skippedDetails?: number;
+    slowCaptures?: number;
+    remainingDetails?: number;
+    speedAnalytics?: {
+      averageSecondsPerFacility: number | null;
+      capturedSamples: number;
+      estimatedSecondsRemaining: number | null;
+      failedDueToTimeout: number;
+      slowCaptures?: number;
+      fastestFacility: { facilityName: string; seconds: number } | null;
+      slowestFacility: { facilityName: string; seconds: number } | null;
+    };
     startedAt: string | null;
     status: "idle" | "running" | "completed" | "failed" | "cancelled";
   };
@@ -78,6 +102,14 @@ type PortalFacilitySummary = {
 
 type PortalScanProgress = PortalFacilitySummary["scanProgress"];
 
+type PortalStartupMetrics = {
+  browserLaunchMs: number | null;
+  portalNavigationMs: number | null;
+  loginDetectionMs: number | null;
+  facilityListReadyMs: number | null;
+  lastUpdatedAt: string | null;
+};
+
 type PortalStatusResult = {
   status: string;
   url: string | null;
@@ -86,6 +118,21 @@ type PortalStatusResult = {
   profileLocked?: boolean;
   profileLockPid?: number;
   profileName: string;
+  storageStateSaved?: boolean;
+  lastLoginSavedAt?: string | null;
+  startupMetrics?: PortalStartupMetrics;
+  fullScanPreflight?: {
+    browserOpen: boolean;
+    browserConnected: boolean;
+    sessionSaved: boolean;
+    loggedIn: boolean;
+    currentUrl: string | null;
+    facilityListDetected: boolean;
+    readyForFullScan: boolean;
+    reason: string | null;
+  };
+  readyForFullScan?: boolean;
+  fullScanBlockedReason?: string | null;
 };
 
 type PortalSessionManagerStatus = {
@@ -99,6 +146,12 @@ type PortalSessionManagerStatus = {
   openedAt: string | null;
   lastActivity: string | null;
   currentFacility: string | null;
+  portalSessionState?: "active" | "expired" | "saved" | "missing";
+  readyForFullScan?: boolean;
+  fullScanBlockedReason?: string | null;
+  storageStateSaved?: boolean;
+  lastLoginSavedAt?: string | null;
+  startupMetrics?: PortalStartupMetrics;
 };
 
 type PortalReleaseLockResult = {
@@ -126,6 +179,35 @@ type PortalRecordsResult = {
   records: PortalCachedRecord[];
 };
 
+type PortalWorkflowStatus =
+  | "DOCUMENT_QUERY"
+  | "UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING"
+  | "PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING"
+  | "DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING"
+  | "INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING"
+  | "FINAL_APPROVAL_PENDING";
+
+type PortalWorkflowFacility = {
+  id: string;
+  facilityName: string | null;
+  facilityCode: string | null;
+  category: string | null;
+  lga: string | null;
+  currentWorkflowStatus: PortalWorkflowStatus;
+  currentWorkflowStatusLabel: string;
+  lastActivityDate: string | null;
+  lastScanDate: string | null;
+  rawStatus: string;
+};
+
+type PortalWorkflowSummary = {
+  totalPortalRecords: number;
+  statusCounts: Record<PortalWorkflowStatus, number>;
+  lastScan: string | null;
+  source: "portal_cache";
+  facilities: PortalWorkflowFacility[];
+};
+
 async function fetchApi<T>(url: string, init?: RequestInit) {
   const result = await safeFetchJson<ApiResult<T>>(url, init);
   if (!result.ok) {
@@ -144,16 +226,12 @@ function formatCount(value: number) {
 }
 
 const workflowStatusLabels: Record<string, string> = {
-  document_queried: "Document queried",
-  payment_queried: "Payment queried",
-  upload_payment_pending_document_approval: "Upload payment and pending document approval",
-  payment_approved_pending_document_approval: "Payment approved and pending document approval",
-  document_approved_inspection_pending: "Document approved and inspection reporting pending",
-  inspection_report_upload_pending_approval: "Inspection report upload pending approval",
-  final_approval_pending: "Final approval pending",
-  registration_approved: "Registration approved",
-  waiting_to_onboard: "Waiting to onboard",
-  unknown_status: "Other or unrecognised status",
+  DOCUMENT_QUERY: "Document Query",
+  UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING: "Upload Payment/Document Approval Pending",
+  PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING: "Payment Approved/Document Approval Pending",
+  DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING: "Document Approved/Inspection Report Pending",
+  INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING: "Inspection Report Upload/Inspection Approval Pending",
+  FINAL_APPROVAL_PENDING: "Final Approval Pending",
 };
 
 function statusLabel(status: string) {
@@ -392,8 +470,15 @@ export default function PortalScanPage() {
   const [isStopping, setIsStopping] = useState(false);
   const [isOpening, setIsOpening] = useState(false);
   const [isReleasingLock, setIsReleasingLock] = useState(false);
+  const [isSavingSession, setIsSavingSession] = useState(false);
+  const [isReconnectingSession, setIsReconnectingSession] = useState(false);
+  const [isClearingSession, setIsClearingSession] = useState(false);
   const [cacheQuery, setCacheQuery] = useState("");
   const [cachedRecords, setCachedRecords] = useState<PortalRecordsResult | null>(null);
+  const [workflowSummary, setWorkflowSummary] = useState<PortalWorkflowSummary | null>(null);
+  const [selectedWorkflowStatus, setSelectedWorkflowStatus] = useState<PortalWorkflowStatus | null>(null);
+  const [showFreshScanConfirm, setShowFreshScanConfirm] = useState(false);
+  const [onlyMissingBeds, setOnlyMissingBeds] = useState(true);
   const [isSearchingCache, setIsSearchingCache] = useState(false);
   const [nowMs, setNowMs] = useState<number | null>(null);
 
@@ -401,19 +486,28 @@ export default function PortalScanPage() {
   const runningScanMode = summary?.scanProgress.scanMode ?? "quick";
   const scanProgress = summary?.scanProgress ?? null;
   const currentScanMode = scanProgress?.scanMode ?? runningScanMode;
+  const isDetailScanMode = currentScanMode === "full" || currentScanMode === "fresh_full_scan";
   const scanStarted = Boolean(scanProgress?.startedAt) && scanProgress?.status !== "idle";
   const listProgressTotal = scanProgress?.portalReportedRecords ?? summary?.portalReportedRecords ?? null;
   const detailProgressTotal = scanProgress?.detailTotal ?? summary?.totalPortalRecords ?? null;
   const topCategoryRows = summary?.categoryCounts.slice(0, 8).map((entry) => ({ label: entry.category, count: entry.count })) ?? [];
-  const statusRows = summary ? Object.entries(summary.statusCounts).map(([label, count]) => ({ label: statusLabel(label), count })) : [];
+  const statusRows = workflowSummary ? Object.entries(workflowSummary.statusCounts).map(([label, count]) => ({ label: statusLabel(label), count })) : [];
   const yearlyRows = summary?.yearlyPortalRecordCounts.map((entry) => ({ label: String(entry.year), count: entry.count })) ?? [];
   const currentDetailIndex = getCurrentDetailIndex(scanProgress);
   const currentDetailPosition = getDetailPosition(currentDetailIndex, detailProgressTotal);
   const captureTiming = getRecentCaptureTiming(scanProgress, nowMs);
+  const speedAnalytics = scanProgress?.speedAnalytics;
+  const averageCaptureSeconds = speedAnalytics?.averageSecondsPerFacility ?? captureTiming.averageSeconds;
+  const estimatedRemainingSeconds = speedAnalytics?.estimatedSecondsRemaining ?? captureTiming.estimatedRemainingSeconds;
+  const captureSampleSize = speedAnalytics?.capturedSamples ?? captureTiming.sampleSize;
+  const capturePerMinute = averageCaptureSeconds ? 60 / averageCaptureSeconds : null;
   const portalSessionReady = Boolean(sessionStatus?.browserOpen && sessionStatus.loggedIn);
   const scanReady = portalSessionReady;
   const quickScanReady = scanReady && !isScanning && !isLoading && !isScanRunning;
-  const fullScanReady = scanReady && !isScanning && !isLoading && !isScanRunning;
+  const fullScanReady = Boolean(portalSessionReady && !isScanning && !isLoading && !isScanRunning);
+  const selectedWorkflowFacilities = selectedWorkflowStatus
+    ? (workflowSummary?.facilities ?? []).filter((facility) => facility.currentWorkflowStatus === selectedWorkflowStatus)
+    : [];
 
   useEffect(() => {
     void loadStatusAndSummary();
@@ -444,18 +538,20 @@ export default function PortalScanPage() {
 
     const pollSummary = async () => {
       try {
-        const [nextSummary, nextSessionStatus] = await Promise.all([
+        const [nextSummary, nextSessionStatus, nextWorkflowSummary] = await Promise.all([
           fetchApi<PortalFacilitySummary>("/api/portal/summary"),
           fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"),
+          fetchApi<PortalWorkflowSummary>("/api/portal/workflow-summary"),
         ]);
         setSummary(nextSummary);
         setSessionStatus(nextSessionStatus);
+        setWorkflowSummary(nextWorkflowSummary);
         if (nextSummary.scanProgress.status === "completed") {
-          setMessage(nextSummary.scanProgress.scanMode === "full"
+          setMessage(nextSummary.scanProgress.scanMode === "full" || nextSummary.scanProgress.scanMode === "fresh_full_scan"
             ? "Full detail scan completed. Portal details are saved for offline AI answers."
             : "Quick scan completed. Portal analytics and summaries are ready.");
         } else if (nextSummary.scanProgress.status === "cancelled") {
-          setMessage(nextSummary.scanProgress.message ?? "Portal scan stopped. Restart Full Detail Scan to resume from cached captures.");
+          setMessage(nextSummary.scanProgress.message ?? "Stop requested. Scan will stop after current facility.");
         } else if (nextSummary.scanProgress.status === "failed") {
           setMessage(nextSummary.scanProgress.error ?? "Portal scan failed.");
         } else if (nextSummary.scanProgress.status === "running" && nextSummary.scanProgress.message) {
@@ -475,24 +571,26 @@ export default function PortalScanPage() {
     setMessage("Loading portal status and summary...");
 
     try {
-      const [nextStatus, nextSummary, nextSessionStatus] = await Promise.all([
+      const [nextStatus, nextSummary, nextSessionStatus, nextWorkflowSummary] = await Promise.all([
         fetchApi<PortalStatusResult>("/api/portal/status"),
         fetchApi<PortalFacilitySummary>("/api/portal/summary"),
         fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"),
+        fetchApi<PortalWorkflowSummary>("/api/portal/workflow-summary"),
       ]);
       setStatus(nextStatus);
       setSummary(nextSummary);
       setSessionStatus(nextSessionStatus);
+      setWorkflowSummary(nextWorkflowSummary);
       if (nextSummary.scanProgress.status === "failed") {
         setMessage(nextSummary.scanProgress.error ?? "Portal scan failed. Log in to the portal and run the scan again.");
       } else if (nextSummary.scanProgress.status === "cancelled") {
         setMessage(nextSummary.scanProgress.message ?? "Portal scan stopped. Restart Full Detail Scan to resume from cached captures.");
       } else if (nextSummary.scanProgress.status === "running") {
-        setMessage(nextSummary.scanProgress.message ?? (nextSummary.scanProgress.scanMode === "full"
+        setMessage(nextSummary.scanProgress.message ?? (nextSummary.scanProgress.scanMode === "full" || nextSummary.scanProgress.scanMode === "fresh_full_scan"
           ? "Full detail scan is running. Facility records are being captured into the local offline index."
           : "Quick portal scan is running. Analytics will update as rows are indexed."));
       } else if (nextSummary.scanProgress.status === "completed") {
-        setMessage(nextSummary.scanProgress.scanMode === "full"
+        setMessage(nextSummary.scanProgress.scanMode === "full" || nextSummary.scanProgress.scanMode === "fresh_full_scan"
           ? "Full detail scan completed. Portal details are saved for offline AI answers."
           : "Quick scan completed. Portal analytics and summaries are ready.");
       } else {
@@ -507,7 +605,7 @@ export default function PortalScanPage() {
 
   async function openPortal() {
     setIsOpening(true);
-    setMessage("Opening managed HEFAMAA portal browser...");
+    setMessage("Opening controlled portal browser...");
 
     try {
       const nextStatus = await fetchApi<PortalStatusResult>("/api/portal/open", {
@@ -516,7 +614,7 @@ export default function PortalScanPage() {
       const nextSessionStatus = await fetchApi<PortalSessionManagerStatus>("/api/portal/session/status");
       setStatus(nextStatus);
       setSessionStatus(nextSessionStatus);
-      setMessage(nextStatus.note ?? "Portal opened. Log in manually, then navigate to the facility list before scanning.");
+      setMessage(nextStatus.note ?? "Portal browser opened. Log in manually if needed, then navigate to the facility list before scanning.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to open portal.");
     } finally {
@@ -524,23 +622,32 @@ export default function PortalScanPage() {
     }
   }
 
-  async function scanPortal(mode: "quick" | "full") {
+  async function scanPortal(mode: "quick" | "full" | "fresh_full_scan", options: { onlyMissingBeds?: boolean } = {}) {
     setIsScanning(true);
-    setMessage(mode === "full"
-      ? "Starting full detail scan. The agent will open the current-year record when available, otherwise the latest valid available renewal record..."
-      : "Starting quick portal scan for analytics and summaries...");
+    setMessage(mode === "fresh_full_scan"
+      ? "Starting Fresh Full Scan. Existing records will be updated without creating duplicates..."
+      : mode === "full"
+        ? "Starting full detail scan. The agent will open the current-year record when available, otherwise the latest valid available renewal record..."
+        : "Starting quick portal scan for analytics and summaries...");
 
     try {
       const nextSummary = await fetchApi<PortalFacilitySummary>("/api/portal/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, onlyMissingBeds: options.onlyMissingBeds }),
       });
       setSummary(nextSummary);
-      setSessionStatus(await fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"));
-      setMessage(mode === "full"
-        ? "Full detail scan started in the background. It will skip older yearly renewal portals and capture the latest/current facility details."
-        : "Quick scan started in the background. Progress will update automatically.");
+      const [nextSessionStatus, nextWorkflowSummary] = await Promise.all([
+        fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"),
+        fetchApi<PortalWorkflowSummary>("/api/portal/workflow-summary"),
+      ]);
+      setSessionStatus(nextSessionStatus);
+      setWorkflowSummary(nextWorkflowSummary);
+      setMessage(mode === "fresh_full_scan"
+        ? "Fresh Full Scan started in the background. Progress will show recaptured records and bed-field coverage."
+        : mode === "full"
+          ? "Full detail scan started in the background. It will skip older yearly renewal portals and capture the latest/current facility details."
+          : "Quick scan started in the background. Progress will update automatically.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to scan portal.");
     } finally {
@@ -549,20 +656,19 @@ export default function PortalScanPage() {
   }
 
   async function stopScan() {
-    const stoppedAt = new Date().toISOString();
-
     setIsStopping(true);
-    setMessage("Stop requested. Saving current progress and closing the portal scan session...");
+    setMessage("Stop requested. Scan will stop after the current facility finishes. The portal session will stay open.");
     setSummary((current) => current
       ? {
           ...current,
           scanProgress: {
             ...current.scanProgress,
-            completedAt: stoppedAt,
-            currentFacilityHefamaaId: null,
-            currentFacilityName: null,
-            message: "Portal scan stop requested. Already captured details are saved and will be skipped on restart.",
-            status: "cancelled",
+            completedAt: null,
+            currentFacilityHefamaaId: current.scanProgress.currentFacilityHefamaaId ?? null,
+            currentFacilityName: current.scanProgress.currentFacilityName ?? null,
+            message: "Stop requested. Scan will stop after the current facility finishes.",
+            status: "running",
+            stopRequested: true,
           },
         }
       : current);
@@ -590,9 +696,54 @@ export default function PortalScanPage() {
     }
   }
 
+  async function savePortalSession() {
+    setIsSavingSession(true);
+    setMessage("Saving controlled portal session...");
+    try {
+      const result = await fetchApi<{ note?: string; lastLoginSavedAt?: string | null; storageStateSaved?: boolean }>("/api/portal/session/save", { method: "POST" });
+      setSessionStatus(await fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"));
+      setStatus((current) => current ? { ...current, storageStateSaved: result.storageStateSaved, lastLoginSavedAt: result.lastLoginSavedAt } : current);
+      setMessage(result.note ?? "Portal session saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save portal session.");
+    } finally {
+      setIsSavingSession(false);
+    }
+  }
+
+  async function reconnectPortalSession() {
+    setIsReconnectingSession(true);
+    setMessage("Reconnecting controlled portal session...");
+    try {
+      const result = await fetchApi<{ note?: string; lastLoginSavedAt?: string | null; sessionState?: string; storageStateSaved?: boolean }>("/api/portal/session/reconnect", { method: "POST" });
+      const nextSessionStatus = await fetchApi<PortalSessionManagerStatus>("/api/portal/session/status");
+      setSessionStatus(nextSessionStatus);
+      setMessage(result.note ?? (nextSessionStatus.loggedIn ? "Portal session reconnected." : "Portal session expired. Please login again."));
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to reconnect portal session.");
+    } finally {
+      setIsReconnectingSession(false);
+    }
+  }
+
+  async function clearPortalSession() {
+    setIsClearingSession(true);
+    setMessage("Clearing saved portal session...");
+    try {
+      const result = await fetchApi<{ note?: string; lastLoginSavedAt?: string | null; storageStateSaved?: boolean }>("/api/portal/session/clear", { method: "POST" });
+      setSessionStatus(await fetchApi<PortalSessionManagerStatus>("/api/portal/session/status"));
+      setStatus((current) => current ? { ...current, storageStateSaved: result.storageStateSaved, lastLoginSavedAt: result.lastLoginSavedAt } : current);
+      setMessage(result.note ?? "Saved portal session cleared.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to clear portal session.");
+    } finally {
+      setIsClearingSession(false);
+    }
+  }
+
   async function releasePortalLock() {
     setIsReleasingLock(true);
-    setMessage("Releasing stale HEFAMAA portal profile lock...");
+    setMessage("Releasing stale portal browser session lock...");
 
     try {
       const result = await fetchApi<PortalReleaseLockResult>("/api/portal/release-lock", {
@@ -611,9 +762,9 @@ export default function PortalScanPage() {
             profileLockPid: result.profileLockPid,
             profileName: result.profileName,
           });
-      setMessage(result.note ?? "Portal profile lock released. Run Full Detail Scan again.");
+      setMessage(result.note ?? "Portal browser session lock released. Run Full Detail Scan again.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to release portal profile lock.");
+      setMessage(error instanceof Error ? error.message : "Unable to release portal browser session lock.");
     } finally {
       setIsReleasingLock(false);
     }
@@ -663,6 +814,45 @@ export default function PortalScanPage() {
               </span>
             </button>
             <button
+              aria-label="Save portal session"
+              className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-emerald-50 text-emerald-700 shadow-[0_10px_0_rgba(4,120,87,0.24),0_18px_34px_rgba(15,23,42,0.18)] ring-1 ring-emerald-100/80 transition hover:-translate-y-0.5 hover:bg-white active:translate-y-1 disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={!sessionStatus?.browserOpen || isSavingSession}
+              onClick={() => void savePortalSession()}
+              title="Save Portal Session"
+              type="button"
+            >
+              {isSavingSession ? <Loader2 className="h-5 w-5 animate-spin" /> : <Save className="h-5 w-5" />}
+              <span className="pointer-events-none absolute -top-8 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-950 px-2 py-1 text-[11px] font-bold text-white shadow-lg group-hover:block">
+                Save Session
+              </span>
+            </button>
+            <button
+              aria-label="Reconnect portal session"
+              className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-cyan-50 text-cyan-700 shadow-[0_10px_0_rgba(14,116,144,0.24),0_18px_34px_rgba(15,23,42,0.18)] ring-1 ring-cyan-100/80 transition hover:-translate-y-0.5 hover:bg-white active:translate-y-1 disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={isReconnectingSession || isLoading}
+              onClick={() => void reconnectPortalSession()}
+              title="Reconnect Portal"
+              type="button"
+            >
+              {isReconnectingSession ? <Loader2 className="h-5 w-5 animate-spin" /> : <RotateCcw className="h-5 w-5" />}
+              <span className="pointer-events-none absolute -top-8 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-950 px-2 py-1 text-[11px] font-bold text-white shadow-lg group-hover:block">
+                Reconnect
+              </span>
+            </button>
+            <button
+              aria-label="Clear saved portal session"
+              className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-slate-50 text-slate-700 shadow-[0_10px_0_rgba(51,65,85,0.22),0_18px_34px_rgba(15,23,42,0.18)] ring-1 ring-slate-100/80 transition hover:-translate-y-0.5 hover:bg-white active:translate-y-1 disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={isClearingSession || isScanRunning}
+              onClick={() => void clearPortalSession()}
+              title="Clear Portal Session"
+              type="button"
+            >
+              {isClearingSession ? <Loader2 className="h-5 w-5 animate-spin" /> : <Trash2 className="h-5 w-5" />}
+              <span className="pointer-events-none absolute -top-8 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-950 px-2 py-1 text-[11px] font-bold text-white shadow-lg group-hover:block">
+                Clear Session
+              </span>
+            </button>
+            <button
               aria-label="Run quick portal scan"
               className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-blue-50 text-blue-700 shadow-[0_10px_0_rgba(29,78,216,0.30),0_18px_34px_rgba(15,23,42,0.20)] ring-1 ring-blue-100/80 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_12px_0_rgba(29,78,216,0.32),0_22px_38px_rgba(15,23,42,0.22)] active:translate-y-1 active:shadow-[0_4px_0_rgba(29,78,216,0.30),0_10px_22px_rgba(15,23,42,0.18)] disabled:cursor-not-allowed disabled:opacity-55"
               disabled={!quickScanReady}
@@ -686,6 +876,19 @@ export default function PortalScanPage() {
               {isScanning && runningScanMode === "full" ? <Loader2 className="h-5 w-5 animate-spin" /> : <Zap className="h-5 w-5" />}
               <span className="pointer-events-none absolute -top-8 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-950 px-2 py-1 text-[11px] font-bold text-white shadow-lg group-hover:block">
                 Full Scan
+              </span>
+            </button>
+            <button
+              aria-label="Run fresh full scan"
+              className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-white/45 bg-indigo-50 text-indigo-700 shadow-[0_10px_0_rgba(67,56,202,0.30),0_18px_34px_rgba(15,23,42,0.20)] ring-1 ring-indigo-100/80 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_12px_0_rgba(67,56,202,0.32),0_22px_38px_rgba(15,23,42,0.22)] active:translate-y-1 active:shadow-[0_4px_0_rgba(67,56,202,0.30),0_10px_22px_rgba(15,23,42,0.18)] disabled:cursor-not-allowed disabled:opacity-55"
+              disabled={!fullScanReady}
+              onClick={() => setShowFreshScanConfirm(true)}
+              title={fullScanReady ? "Fresh Full Scan" : "Open portal and log in first"}
+              type="button"
+            >
+              {isScanning && runningScanMode === "fresh_full_scan" ? <Loader2 className="h-5 w-5 animate-spin" /> : <RotateCcw className="h-5 w-5" />}
+              <span className="pointer-events-none absolute -top-8 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-950 px-2 py-1 text-[11px] font-bold text-white shadow-lg group-hover:block">
+                Fresh Full Scan
               </span>
             </button>
             {isScanRunning ? (
@@ -719,7 +922,7 @@ export default function PortalScanPage() {
             )}
             {!isScanRunning && status?.profileLocked ? (
               <button
-                aria-label="Release stale portal profile lock"
+                aria-label="Release stale portal browser session lock"
                 className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-amber-200 bg-amber-50 text-amber-800 shadow-[0_10px_0_rgba(180,83,9,0.30),0_18px_34px_rgba(15,23,42,0.20)] ring-1 ring-amber-100 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-[0_12px_0_rgba(180,83,9,0.32),0_22px_38px_rgba(15,23,42,0.22)] active:translate-y-1 active:shadow-[0_4px_0_rgba(180,83,9,0.30),0_10px_22px_rgba(15,23,42,0.18)] disabled:cursor-not-allowed disabled:opacity-55"
                 disabled={isReleasingLock || isScanning}
                 onClick={() => void releasePortalLock()}
@@ -767,20 +970,24 @@ export default function PortalScanPage() {
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                   <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                    Profile Lock
+                    Session Lock
                   </p>
                   <p className="mt-2 text-[14px] font-semibold text-slate-950">
                     {status?.profileLocked ? `Locked${status.profileLockPid ? ` (${status.profileLockPid})` : ""}` : "Unlocked"}
                   </p>
                 </div>
                 {[
+                  ["Portal Session", sessionStatus?.portalSessionState === "active" ? "Active" : sessionStatus?.portalSessionState === "expired" ? "Expired" : sessionStatus?.storageStateSaved || status?.storageStateSaved ? "Saved" : "Missing"],
+                  ["Last Login Saved", sessionStatus?.lastLoginSavedAt ?? status?.lastLoginSavedAt ?? "Not saved"],
                   ["Browser", sessionStatus?.browserOpen ? "Open" : "Closed"],
                   ["Logged In", sessionStatus?.loggedIn ? "Yes" : "No"],
                   ["Facility Table", sessionStatus?.facilityListDetected ? "Detected" : "Not detected"],
                   ["Quick Scan Ready", quickScanReady ? "Ready" : "Waiting"],
-                  ["Full Scan Ready", fullScanReady ? "Ready" : "Waiting"],
+                  ["Full Scan Ready", sessionStatus?.readyForFullScan ? "Ready" : sessionStatus?.fullScanBlockedReason || "Waiting"],
                   ["Facilities Cached", sessionStatus ? formatCount(sessionStatus.cachedFacilities) : "-"],
                   ["Current Facility", sessionStatus?.currentFacility || scanProgress?.currentFacilityName || "None"],
+                  ["Scan Status", scanProgress?.stopRequested ? "Stop requested" : scanProgress?.status ?? "Idle"],
+                  ["Open Tabs", formatCount(scanProgress?.openTabsCount ?? 0)],
                   ["Last Activity", sessionStatus?.lastActivity ?? "-"],
                 ].map(([label, value]) => (
                   <div className="rounded-2xl border border-blue-100 bg-blue-50/60 p-4" key={label}>
@@ -788,6 +995,27 @@ export default function PortalScanPage() {
                     <p className="mt-2 break-words text-[14px] font-semibold text-slate-950">{value}</p>
                   </div>
                 ))}
+              </div>
+              <div className="mt-5 rounded-2xl border border-blue-100 bg-white p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-blue-700">Startup Performance</p>
+                    <p className="mt-1 text-[12px] font-semibold text-slate-500">Controlled browser overhead only; portal server/network time may vary.</p>
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    ["Browser Launch Time", sessionStatus?.startupMetrics?.browserLaunchMs ?? status?.startupMetrics?.browserLaunchMs],
+                    ["Portal Load Time", sessionStatus?.startupMetrics?.portalNavigationMs ?? status?.startupMetrics?.portalNavigationMs],
+                    ["Login Ready Time", sessionStatus?.startupMetrics?.loginDetectionMs ?? status?.startupMetrics?.loginDetectionMs],
+                    ["Facility List Ready Time", sessionStatus?.startupMetrics?.facilityListReadyMs ?? status?.startupMetrics?.facilityListReadyMs],
+                  ].map(([label, value]) => (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3" key={String(label)}>
+                      <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-slate-500">{label}</p>
+                      <p className="mt-2 text-[15px] font-extrabold text-slate-950">{typeof value === "number" ? `${value}ms` : "-"}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -859,7 +1087,7 @@ export default function PortalScanPage() {
                               ? "text-blue-950"
                               : "text-blue-950")
                         }>
-                          {currentScanMode === "full" ? "Full detail scan" : "Quick portal scan"} {scanProgress?.status === "running" ? "in progress" : scanProgress?.status}
+                          {scanProgress?.stopRequested ? "Stop requested" : isDetailScanMode ? currentScanMode === "fresh_full_scan" ? "Fresh scan running" : "Full detail scan" : "Quick portal scan"} {scanProgress?.stopRequested ? "" : scanProgress?.status === "running" ? "in progress" : scanProgress?.status}
                         </p>
                         {scanProgress?.message ? (
                           <p className="mt-1 text-[12px] font-semibold leading-5 text-slate-700">{scanProgress.message}</p>
@@ -902,10 +1130,10 @@ export default function PortalScanPage() {
                     <div className="rounded-lg border border-white/70 bg-white/75 p-3">
                       <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Captured details</p>
                       <p className="mt-1 text-[18px] font-extrabold text-slate-950">
-                        {formatCount(scanProgress?.scannedDetails ?? 0)}{currentScanMode === "full" ? " / " + formatCount(detailProgressTotal ?? 0) : ""}
+                        {formatCount(scanProgress?.scannedDetails ?? 0)}{isDetailScanMode ? " / " + formatCount(detailProgressTotal ?? 0) : ""}
                       </p>
                     </div>
-                    {currentScanMode === "full" ? (
+                    {isDetailScanMode ? (
                       <>
                         <div className="rounded-lg border border-white/70 bg-white/75 p-3">
                           <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Failed details</p>
@@ -915,12 +1143,44 @@ export default function PortalScanPage() {
                           <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Skipped details</p>
                           <p className="mt-1 text-[18px] font-extrabold text-amber-700">{formatCount(scanProgress?.skippedDetails ?? 0)}</p>
                         </div>
+                        <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Remaining</p>
+                          <p className="mt-1 text-[18px] font-extrabold text-slate-950">{formatCount(scanProgress?.remainingDetails ?? Math.max(0, (detailProgressTotal ?? 0) - (scanProgress?.scannedDetails ?? 0) - (scanProgress?.failedDetails ?? 0) - (scanProgress?.skippedDetails ?? 0)))}</p>
+                        </div>
+                        <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Slow captures</p>
+                          <p className="mt-1 text-[18px] font-extrabold text-orange-700">{formatCount(scanProgress?.slowCaptures ?? scanProgress?.speedAnalytics?.slowCaptures ?? 0)}</p>
+                        </div>
+                        <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Open tabs</p>
+                          <p className="mt-1 text-[18px] font-extrabold text-blue-700">{formatCount(scanProgress?.openTabsCount ?? 0)}</p>
+                        </div>
+                        <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                          <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Stop signal</p>
+                          <p className="mt-1 text-[14px] font-extrabold text-slate-950">{scanProgress?.stopRequested ? "Requested" : "Clear"}</p>
+                        </div>
+                        {currentScanMode === "fresh_full_scan" ? (
+                          <>
+                            <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Recaptured</p>
+                              <p className="mt-1 text-[18px] font-extrabold text-indigo-700">{formatCount(scanProgress?.recapturedDetails ?? 0)}</p>
+                            </div>
+                            <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Beds captured</p>
+                              <p className="mt-1 text-[18px] font-extrabold text-blue-700">{formatCount(scanProgress?.bedsCapturedCount ?? 0)}</p>
+                            </div>
+                            <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                              <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Missing bed data</p>
+                              <p className="mt-1 text-[18px] font-extrabold text-amber-700">{formatCount(scanProgress?.missingBedDataCount ?? 0)}</p>
+                            </div>
+                          </>
+                        ) : null}
                       </>
                     ) : null}
                   </div>
 
-                  {currentScanMode === "full" ? (
-                    <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                  {isDetailScanMode ? (
+                    <div className="mt-4 grid gap-3 lg:grid-cols-4">
                       <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
                         <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-blue-700">Current table position</p>
                         <p className="mt-2 text-[20px] font-extrabold text-slate-950">
@@ -934,24 +1194,31 @@ export default function PortalScanPage() {
                       </div>
                       <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
                         <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-blue-700">Capture speed</p>
-                        <p className="mt-2 text-[20px] font-extrabold text-slate-950">{formatSecondsPerFacility(captureTiming.averageSeconds)}</p>
+                        <p className="mt-2 text-[20px] font-extrabold text-slate-950">{formatSecondsPerFacility(averageCaptureSeconds)}</p>
                         <p className="mt-1 text-[12px] font-semibold text-slate-600">
-                          {captureTiming.perMinute ? captureTiming.perMinute.toFixed(1) + " facilities/min" : "Calculating from live captures"}
-                          {captureTiming.sampleSize ? " - last " + captureTiming.sampleSize + " samples" : ""}
+                          {capturePerMinute ? capturePerMinute.toFixed(1) + " facilities/min" : "Calculating from live captures"}
+                          {captureSampleSize ? " - " + captureSampleSize + " samples" : ""}
                         </p>
                       </div>
                       <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
                         <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-blue-700">Estimated remaining</p>
-                        <p className="mt-2 text-[20px] font-extrabold text-slate-950">{formatDurationFromSeconds(captureTiming.estimatedRemainingSeconds)}</p>
+                        <p className="mt-2 text-[20px] font-extrabold text-slate-950">{formatDurationFromSeconds(estimatedRemainingSeconds)}</p>
                         <p className="mt-1 text-[12px] font-semibold text-slate-600">
                           Active record: {formatDurationFromSeconds(captureTiming.activeSeconds)}
-                          {captureTiming.lastSeconds ? " - last saved in " + formatSecondsPerFacility(captureTiming.lastSeconds) : ""}
+                          {scanProgress?.lastCaptureMs ? " - last capture " + formatSecondsPerFacility(scanProgress.lastCaptureMs / 1000) : speedAnalytics?.failedDueToTimeout ? " - timeouts " + formatCount(speedAnalytics.failedDueToTimeout) : captureTiming.lastSeconds ? " - last saved in " + formatSecondsPerFacility(captureTiming.lastSeconds) : ""}
+                        </p>
+                      </div>
+                      <div className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
+                        <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-blue-700">Fastest / slowest</p>
+                        <p className="mt-2 text-[14px] font-extrabold text-slate-950">Fastest: {speedAnalytics?.fastestFacility ? formatSecondsPerFacility(speedAnalytics.fastestFacility.seconds) : "-"}</p>
+                        <p className="mt-1 truncate text-[12px] font-semibold text-slate-600" title={speedAnalytics?.slowestFacility?.facilityName ?? undefined}>
+                          Slowest: {speedAnalytics?.slowestFacility ? formatSecondsPerFacility(speedAnalytics.slowestFacility.seconds) + " - " + speedAnalytics.slowestFacility.facilityName : "-"}
                         </p>
                       </div>
                     </div>
                   ) : null}
 
-                  {currentScanMode === "full" && scanProgress?.currentFacilityName ? (
+                  {isDetailScanMode && scanProgress?.currentFacilityName ? (
                     <div className="mt-4 rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
                       <div className="flex items-start gap-3">
                         <Loader2 className="mt-0.5 h-5 w-5 animate-spin text-blue-700" />
@@ -964,13 +1231,13 @@ export default function PortalScanPage() {
                     </div>
                   ) : null}
 
-                  {currentScanMode === "full" && scanProgress?.lastCapturedFacilityName ? (
+                  {isDetailScanMode && scanProgress?.lastCapturedFacilityName ? (
                     <div className="mt-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-[13px] font-bold text-blue-900">
                       Last successful capture: {scanProgress.lastCapturedFacilityName}
                     </div>
                   ) : null}
 
-                  {currentScanMode === "full" && scanProgress?.recentEvents?.length ? (
+                  {isDetailScanMode && scanProgress?.recentEvents?.length ? (
                     <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <h3 className="text-[13px] font-extrabold text-slate-950">Live Capture Activity</h3>
@@ -1007,7 +1274,7 @@ export default function PortalScanPage() {
                         <div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: progressPercent(scanProgress?.scannedRecords, listProgressTotal).toFixed(1) + "%" }} />
                       </div>
                     </div>
-                    {currentScanMode === "full" ? (
+                    {isDetailScanMode ? (
                       <div>
                         <div className="mb-1 flex items-center justify-between text-[12px] font-bold text-slate-700">
                           <span>Facility detail capture</span>
@@ -1038,16 +1305,65 @@ export default function PortalScanPage() {
                 </div>
               ) : null}
 
-              {summary ? (
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  {Object.entries(summary.statusCounts).map(([statusKey, count]) => (
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4" key={statusKey}>
-                      <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
-                        {statusLabel(statusKey)}
-                      </p>
-                      <p className="mt-2 text-[20px] font-semibold text-slate-950">{formatCount(count)}</p>
+              {workflowSummary ? (
+                <div className="mt-5 space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {Object.entries(workflowSummary.statusCounts).map(([statusKey, count]) => (
+                      <button
+                        className={["rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md", selectedWorkflowStatus === statusKey ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white"].join(" ")}
+                        key={statusKey}
+                        onClick={() => setSelectedWorkflowStatus(selectedWorkflowStatus === statusKey ? null : statusKey as PortalWorkflowStatus)}
+                        type="button"
+                      >
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                          {statusLabel(statusKey)}
+                        </p>
+                        <p className="mt-2 text-[20px] font-semibold text-slate-950">{formatCount(count)}</p>
+                      </button>
+                    ))}
+                  </div>
+                  {selectedWorkflowStatus ? (
+                    <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-blue-50 px-4 py-3">
+                        <div>
+                          <p className="text-[13px] font-extrabold text-slate-950">{statusLabel(selectedWorkflowStatus)}</p>
+                          <p className="text-[12px] font-semibold text-slate-500">{formatCount(selectedWorkflowFacilities.length)} portal-cache facilities</p>
+                        </div>
+                        <button className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-[12px] font-bold text-blue-700" onClick={() => setSelectedWorkflowStatus(null)} type="button">Close</button>
+                      </div>
+                      <div className="max-h-96 overflow-auto">
+                        <table className="min-w-full divide-y divide-slate-200 text-left text-[12px]">
+                          <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-[0.08em] text-slate-500">
+                            <tr>
+                              <th className="px-3 py-2">Facility Name</th>
+                              <th className="px-3 py-2">HEFA NO / Facility Code</th>
+                              <th className="px-3 py-2">Category</th>
+                              <th className="px-3 py-2">LGA</th>
+                              <th className="px-3 py-2">Current Workflow Status</th>
+                              <th className="px-3 py-2">Last Activity Date</th>
+                              <th className="px-3 py-2">Last Scan Date</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {selectedWorkflowFacilities.slice(0, 300).map((facility) => (
+                              <tr className="align-top" key={facility.id}>
+                                <td className="px-3 py-2 font-bold text-slate-950">{facility.facilityName || "Unnamed facility"}</td>
+                                <td className="px-3 py-2 text-blue-700">{facility.facilityCode || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.category || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.lga || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.currentWorkflowStatusLabel}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.lastActivityDate || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.lastScanDate || "-"}</td>
+                              </tr>
+                            ))}
+                            {!selectedWorkflowFacilities.length ? (
+                              <tr><td className="px-3 py-5 text-slate-500" colSpan={7}>No facilities are currently counted under this workflow status.</td></tr>
+                            ) : null}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  ))}
+                  ) : null}
                 </div>
               ) : null}
             </div>
@@ -1185,6 +1501,50 @@ Quick Scan reads the full portal facility list for analytics, status counts, cat
             </div>
           </div>
         </div>
+      {showFreshScanConfirm ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 px-4 py-6">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-700 ring-1 ring-indigo-100">
+                <RotateCcw className="h-5 w-5" />
+              </span>
+              <div>
+                <h2 className="text-[18px] font-extrabold text-slate-950">Fresh Full Scan</h2>
+                <p className="mt-2 text-[14px] leading-6 text-slate-700">
+                  This will rescan all facilities from the beginning and update existing portal cache records. Continue?
+                </p>
+              </div>
+            </div>
+            <label className="mt-5 flex cursor-pointer items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4 text-[13px] font-semibold text-slate-700">
+              <input
+                checked={onlyMissingBeds}
+                className="mt-1 h-4 w-4 rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+                onChange={(event) => setOnlyMissingBeds(event.target.checked)}
+                type="checkbox"
+              />
+              <span>
+                <span className="block font-extrabold text-slate-950">Only recapture missing bed fields</span>
+                <span className="mt-1 block leading-5 text-slate-600">Open only facilities where admission beds, observation beds, or couches are missing or null.</span>
+              </span>
+            </label>
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              <button className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] font-extrabold text-slate-700 hover:bg-slate-50" onClick={() => setShowFreshScanConfirm(false)} type="button">
+                Cancel
+              </button>
+              <button
+                className="rounded-xl bg-indigo-600 px-4 py-2.5 text-[13px] font-extrabold text-white shadow-lg shadow-indigo-600/20 hover:bg-indigo-700"
+                onClick={() => {
+                  setShowFreshScanConfirm(false);
+                  void scanPortal("fresh_full_scan", { onlyMissingBeds });
+                }}
+                type="button"
+              >
+                Start Fresh Full Scan
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       </section>
     </AppShell>
   );

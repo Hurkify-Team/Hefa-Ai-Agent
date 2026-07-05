@@ -7,8 +7,8 @@ import { askDatabaseSchema } from "@/lib/validators";
 
 export const runtime = "nodejs";
 
-function isNotificationIntelligenceQuestion(question: string) {
-  return /document(s)? queried|reminder queue|requires reminders|require reminders|need reminders|hefamaa action|staff action|internal attention|final approval pending|awaiting final approval|overdue renewal|renewal overdue|stale cache|changed status|status changed|notification/i.test(question.toLowerCase());
+function isKnowledgeEngineQuestion(question: string) {
+  return /document(s)? queried|reminder queue|requires reminders|require reminders|need reminders|hefamaa action|staff action|internal attention|final approval pending|awaiting final approval|overdue renewal|renewal overdue|stale cache|changed status|status changed|notification|admission beds?|observation beds?|no of couches|couches?|operating officer|medical professional in charge|medical professional in-charge|medical officer in charge|officer in charge|professional in charge|hefa no|hef\/?no|hef no|hefamaa no|hefa number|facility code|facility id/i.test(question.toLowerCase());
 }
 
 function toSheetRows(rows: Array<Record<string, unknown>> | undefined): SheetRow[] | undefined {
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
         const fast = answerGlobalFacilityTotalQuestion(payload.question);
         return { question: payload.question, answer: fast.answer, rows: toSheetRows(fast.rows) };
       })()
-      : isNotificationIntelligenceQuestion(payload.question)
+      : isKnowledgeEngineQuestion(payload.question)
       ? await import("@/lib/knowledgeEngine").then(async ({ answerQuestion }) => {
         const knowledge = await answerQuestion({ category: payload.category, question: payload.question });
         return { question: payload.question, answer: knowledge.answer, rows: toSheetRows(knowledge.rows) };

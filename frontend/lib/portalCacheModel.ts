@@ -11,12 +11,16 @@ import {
 } from "@/lib/portalCacheStore";
 
 type QaIndexRecord = {
+  admissionBeds?: number | null;
   applicationType?: string;
+  bedDistribution?: { admissionBeds?: number | null; observationBeds?: number | null; couches?: number | null };
+  couches?: number | null;
   capturedAt?: string;
   category?: string;
   facilityName?: string;
   hefamaaId?: string;
   normalizedStatus?: string;
+  observationBeds?: number | null;
   qaFields?: Record<string, string>;
   qaSearchText?: string;
   recordDate?: string | null;
@@ -44,6 +48,10 @@ export type PortalCacheRow = {
   address: string | null;
   contact: string | null;
   email: string | null;
+  admissionBeds: number | null;
+  observationBeds: number | null;
+  couches: number | null;
+  bedDistribution: { admissionBeds: number | null; observationBeds: number | null; couches: number | null };
   owner_name: string | null;
   registration_status: string | null;
   accreditation_status: string | null;
@@ -169,6 +177,37 @@ function globalValue(text: string, labels: string[], fields?: Record<string, str
   return valueAfterLabel(linesOf(text), labels);
 }
 
+function parseBedNumber(value: unknown) {
+  const text = clean(value);
+  if (!text || /^(n\/?a|not applicable|null|nil|none|-|—)$/i.test(text)) return null;
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : null;
+}
+
+const BED_ALIASES = {
+  admissionBeds: ["Admission Bed", "Admission Beds", "ADMISSION BEDS", "No of Admission Beds"],
+  observationBeds: ["Observation Bed", "Observation Beds", "OBSERVATION BEDS", "No of Observation Beds"],
+  couches: ["No of Couches", "Couches", "COUCHES", "Number of Couches"],
+};
+
+function bedValueFromRecord(record: { admissionBeds?: number | null; observationBeds?: number | null; couches?: number | null; bedDistribution?: { admissionBeds?: number | null; observationBeds?: number | null; couches?: number | null } }, key: "admissionBeds" | "observationBeds" | "couches", text: string, fields?: Record<string, string>) {
+  const direct = record[key];
+  if (typeof direct === "number") return direct;
+  const distributed = record.bedDistribution?.[key];
+  if (typeof distributed === "number") return distributed;
+  return parseBedNumber(globalValue(text, BED_ALIASES[key], fields));
+}
+
+function bedDistributionForRecord(record: { admissionBeds?: number | null; observationBeds?: number | null; couches?: number | null; bedDistribution?: { admissionBeds?: number | null; observationBeds?: number | null; couches?: number | null } }, text: string, fields?: Record<string, string>) {
+  return {
+    admissionBeds: bedValueFromRecord(record, "admissionBeds", text, fields),
+    observationBeds: bedValueFromRecord(record, "observationBeds", text, fields),
+    couches: bedValueFromRecord(record, "couches", text, fields),
+  };
+}
+
 function emailFromText(text: string) {
   const matches = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) ?? [];
   return Array.from(new Set(matches.map((email) => email.toLowerCase()))).at(-1) ?? "";
@@ -225,8 +264,10 @@ function detailToRow(record: LightweightPortalFacilityDetailRecord, index: numbe
   const text = textOf(record);
   const fields = record.visibleFields ?? {};
   const status = clean(record.registrationStatus || record.normalizedStatus);
+  const bedDistribution = bedDistributionForRecord(record, text, fields);
   const structuredData = {
     applicationType: record.applicationType ?? null,
+    bedDistribution,
     fieldIndex: record.fieldIndex ?? null,
     renewalYear: record.renewalYear ?? record.sourceRecord?.renewalYear ?? null,
     formFields: record.formFields ?? null,
@@ -246,6 +287,10 @@ function detailToRow(record: LightweightPortalFacilityDetailRecord, index: numbe
     address: sectionValue(text, "CONTACT DETAILS", ["ADDRESS", "FACILITY ADDRESS"]) || globalValue(text, ["ADDRESS", "FACILITY ADDRESS"], fields) || null,
     contact: sectionValue(text, "CONTACT DETAILS", ["PHONE NUMBER", "PHONE", "CONTACT"]) || globalValue(text, ["PHONE NUMBER", "PHONE", "CONTACT"], fields) || phoneFromText(text) || null,
     email: globalValue(text, ["EMAIL", "E-MAIL", "FACILITY EMAIL"], fields) || emailFromText(text) || null,
+    admissionBeds: bedDistribution.admissionBeds,
+    observationBeds: bedDistribution.observationBeds,
+    couches: bedDistribution.couches,
+    bedDistribution,
     owner_name: sectionValue(text, "PROPRIETORS DETAILS", ["NAME", "OWNER NAME", "PROPRIETOR NAME"]) || globalValue(text, ["OWNER'S NAME", "OWNER NAME", "PROPRIETOR"], fields) || null,
     registration_status: status || null,
     accreditation_status: inferStatusPart(status, "accreditation"),
@@ -266,6 +311,7 @@ function qaToRow(record: QaIndexRecord, index: number): PortalCacheRow {
   const mergedFields = { ...(record.visibleFields ?? {}), ...fields };
   const text = clean(record.qaSearchText);
   const status = clean(record.registrationStatus || record.normalizedStatus || fields.status);
+  const bedDistribution = bedDistributionForRecord(record, text, mergedFields);
   return {
     id: rowId(record as LightweightPortalFacilityRecord, index),
     facility_name: clean(record.facilityName) || null,
@@ -276,6 +322,10 @@ function qaToRow(record: QaIndexRecord, index: number): PortalCacheRow {
     address: clean(fields.address) || null,
     contact: globalValue(text, ["PHONE NUMBER", "PHONE", "CONTACT"], mergedFields) || clean(fields.contact_phone) || null,
     email: globalValue(text, ["EMAIL", "E-MAIL", "FACILITY EMAIL"], mergedFields) || clean(fields.email) || null,
+    admissionBeds: bedDistribution.admissionBeds,
+    observationBeds: bedDistribution.observationBeds,
+    couches: bedDistribution.couches,
+    bedDistribution,
     owner_name: clean(fields.owner) || null,
     registration_status: status || null,
     accreditation_status: inferStatusPart(status, "accreditation"),
@@ -284,7 +334,7 @@ function qaToRow(record: QaIndexRecord, index: number): PortalCacheRow {
     doctors_count: Number(record.staffComplement?.Doctors || 0) || null,
     nurses_count: Number(record.staffComplement?.Nurses || 0) || null,
     raw_portal_text: clean(record.qaSearchText) || null,
-    structured_portal_data: { qaFields: fields, renewalYear: record.renewalYear ?? record.sourceRecord?.renewalYear ?? null, staffComplement: record.staffComplement ?? null, visibleFields: record.visibleFields ?? null },
+    structured_portal_data: { bedDistribution, qaFields: fields, renewalYear: record.renewalYear ?? record.sourceRecord?.renewalYear ?? null, staffComplement: record.staffComplement ?? null, visibleFields: record.visibleFields ?? null },
     source_url: clean(record.url) || null,
     captured_at: clean(record.capturedAt) || null,
     updated_at: clean(record.capturedAt) || clean(record.sourceRecord?.lastSeen) || null,
@@ -304,6 +354,10 @@ function listToRow(record: LightweightPortalFacilityRecord, index: number): Port
     address: null,
     contact: phoneFromText(text) || null,
     email: emailFromText(text) || null,
+    admissionBeds: null,
+    observationBeds: null,
+    couches: null,
+    bedDistribution: { admissionBeds: null, observationBeds: null, couches: null },
     owner_name: null,
     registration_status: status || null,
     accreditation_status: inferStatusPart(status, "accreditation"),

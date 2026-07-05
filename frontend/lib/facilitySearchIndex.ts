@@ -86,7 +86,7 @@ const aliases = {
   contact: ["Contact", "Phone", "Phone Number", "Phone No", "Telephone"],
   email: ["Facility E-Mail", "Facility Email", "Email", "E-Mail", "E-MAIL"],
   facilityName: ["Facility Name", "FACILITY NAME", "Name", "Name of Facility", "FACILITY"],
-  hefNo: ["HEF/NO", "HEF NO", "HEFAMAA NO", "HF NO", "Facility Code", "FACILITY CODE", "Registration Number", "Registration No"],
+  hefNo: ["HEF/NO", "HEF NO", "HEFA NO", "HEFAMAA NO", "HF NO", "HEFA Number", "HEFAMAA Number", "Facility Code", "FACILITY CODE", "Facility ID", "Registration Number", "Registration No"],
   lcda: ["LCDA"],
   lga: ["LGA", "Local Government"],
   ownerName: ["Owner's Name", "Owners Name", "Owner Name", "Proprietor", "Proprietor Name", "Medical Director", "Operating Officer"],

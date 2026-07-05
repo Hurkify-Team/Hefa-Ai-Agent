@@ -5,6 +5,7 @@ import { z } from "zod";
 import { fail, ok } from "@/lib/apiResponse";
 import { answerGlobalFacilityTotalQuestion, isGlobalFacilityTotalQuestion } from "@/lib/fastFacilitySummary";
 import { readPortalListCacheLightweight } from "@/lib/portalCacheStore";
+import { buildPortalWorkflowSummary, PORTAL_WORKFLOW_LABELS, type PortalWorkflowStatus } from "@/lib/portalWorkflow";
 
 export const runtime = "nodejs";
 
@@ -187,6 +188,48 @@ function sourceError(source: AgentSource, error: unknown): AgentSourceResult {
   };
 }
 
+
+function workflowStatusFromQuestion(question: string): PortalWorkflowStatus | null {
+  if (/document\s+quer|queried/i.test(question)) return "DOCUMENT_QUERY";
+  if (/upload\s+payment|upload\s+payment\/document/i.test(question)) return "UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING";
+  if (/payment\s+approved.*document|payment\s+approved\/document/i.test(question)) return "PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING";
+  if (/document\s+approved.*inspection|inspection\s+report\s+pending/i.test(question)) return "DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING";
+  if (/inspection\s+approval|inspection\s+report\s+upload/i.test(question)) return "INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING";
+  if (/final\s+approval/i.test(question)) return "FINAL_APPROVAL_PENDING";
+  return null;
+}
+
+function isPortalWorkflowQuestion(question: string) {
+  return /workflow|document\s+quer|documents\s+queried|final\s+approval|inspection\s+approval|inspection\s+report|upload\s+payment|payment\s+approved|awaiting\s+final|approval\s+pending/i.test(question);
+}
+
+function answerPortalWorkflowQuestion(question: string) {
+  const summary = buildPortalWorkflowSummary();
+  const status = workflowStatusFromQuestion(question);
+  const wantsList = /show|list|which|display|facilities/i.test(question);
+  if (status) {
+    const facilities = summary.facilities.filter((facility) => facility.currentWorkflowStatus === status);
+    return {
+      answer: facilities.length.toLocaleString() + " facilit" + (facilities.length === 1 ? "y is" : "ies are") + " currently under " + PORTAL_WORKFLOW_LABELS[status] + " in the portal scan cache.",
+      rows: wantsList ? facilities.slice(0, 50).map((facility) => ({
+        "Facility Name": facility.facilityName,
+        "HEFA NO / Facility Code": facility.facilityCode,
+        Category: facility.category,
+        LGA: facility.lga,
+        "Current Workflow Status": facility.currentWorkflowStatusLabel,
+        "Last Activity Date": facility.lastActivityDate,
+        "Last Scan Date": facility.lastScanDate,
+      })) : [{ Status: PORTAL_WORKFLOW_LABELS[status], Count: facilities.length }],
+      summary: { status, count: facilities.length, source: summary.source, lastScan: summary.lastScan },
+    };
+  }
+  return {
+    answer: "I grouped the HEFAMAA portal cache by the six official workflow statuses.",
+    rows: Object.entries(summary.statusCounts).map(([Status, Count]) => ({ Status: PORTAL_WORKFLOW_LABELS[Status as PortalWorkflowStatus], Count })),
+    summary: { totalPortalRecords: summary.totalPortalRecords, lastScan: summary.lastScan, source: summary.source },
+  };
+}
+
 function portalSummary() {
   const records = readPortalListCacheLightweight();
   const categories = new Map<string, number>();
@@ -218,8 +261,8 @@ function answerPortalSummaryQuestion(question: string) {
   if (category && /how many|count|total/i.test(question)) {
     return { answer: category.count + " portal rows are currently listed under " + category.category + ".", rows: [category] };
   }
-  if (/status|workflow/i.test(question) && /how many|count|total|summary/i.test(question)) {
-    return { answer: "I grouped the portal cache by workflow status.", rows: Object.entries(summary.statusCounts).map(([Status, Count]) => ({ Status, Count })) };
+  if (/status|workflow|document\s+quer|final\s+approval|inspection\s+approval|upload\s+payment|payment\s+approved/i.test(question) && /how many|count|total|summary|show|list|which|awaiting/i.test(question)) {
+    return answerPortalWorkflowQuestion(question);
   }
   if (/total|how many|count/i.test(question)) {
     return { answer: "The latest portal cache has " + summary.totalPortalRecords + " indexed rows and " + summary.totalFacilities + " distinct facility names." };
@@ -442,6 +485,25 @@ export async function POST(request: Request) {
           actions: [],
         });
       }
+    }
+
+    if (requestedSources.includes("portal") && isPortalWorkflowQuestion(payload.question)) {
+      const result = answerPortalWorkflowQuestion(payload.question);
+      return ok({
+        question: payload.question,
+        answer: "I checked the HEFAMAA Portal Workflow Status cache.\n\n" + result.answer,
+        sources: [{
+          source: "portal",
+          label: SOURCE_LABELS.portal,
+          status: "ok",
+          answer: result.answer,
+          rows: compactRows(result.rows, 12),
+          summary: result.summary,
+        }],
+        rows: compactRows(result.rows, 12),
+        summary: result.summary,
+        actions: exportActionsForQuestion(payload.question),
+      });
     }
 
     if (requestedSources.includes("portal") && isGlobalFacilityTotalQuestion(payload.question)) {
