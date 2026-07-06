@@ -17,10 +17,18 @@ export async function GET() {
     const workflowSummary = buildPortalWorkflowSummary();
     const intelligence = notificationDashboard.intelligence ?? {};
 
+    const totalScanned = Math.max(
+      summary.totalPortalRecords || 0,
+      summary.scanProgress.portalReportedRecords || 0,
+      summary.scanProgress.scannedRecords || 0,
+      workflowSummary.totalPortalRecords || 0,
+    );
+    const lastScanDate = summary.lastScanned || summary.scanProgress.completedAt || summary.scanProgress.startedAt || workflowSummary.lastScan || null;
+
     const payload = {
       success: true,
-      totalScanned: summary.totalPortalRecords || summary.scanProgress.portalReportedRecords || summary.scanProgress.scannedRecords || 0,
-      lastScanDate: summary.lastScanned || summary.scanProgress.completedAt || summary.scanProgress.startedAt || null,
+      totalScanned,
+      lastScanDate,
       verifiedLive: Math.max(summary.detailRecords || 0, summary.scanProgress.scannedDetails || 0),
       staleCache: Number(intelligence.staleCacheCount ?? 0),
       statusCounts: {
@@ -38,7 +46,7 @@ export async function GET() {
         facilityReminderRequired: Number(intelligence.reminderQueueCount ?? notificationDashboard.reminderCandidates ?? 0),
         hefamaaAttentionRequired: Number(intelligence.hefamaaAttentionCount ?? 0),
       },
-      cacheEmpty: !summary.totalPortalRecords && !summary.detailRecords,
+      cacheEmpty: totalScanned === 0,
       source: "portal-cache",
     };
 
