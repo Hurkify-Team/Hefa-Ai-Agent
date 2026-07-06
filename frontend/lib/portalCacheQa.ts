@@ -479,6 +479,16 @@ function detailSearchText(detail: LightweightPortalFacilityDetailRecord) {
     detail.normalizedStatus,
     detail.sourceRecord?.facilityName,
     detail.sourceRecord?.hefamaaId,
+    JSON.stringify(detail.identification ?? {}),
+    JSON.stringify(detail.facilityDetails ?? {}),
+    JSON.stringify(detail.proprietorDetails ?? {}),
+    JSON.stringify(detail.operations ?? {}),
+    JSON.stringify(detail.facilityResources ?? {}),
+    JSON.stringify(detail.operatingOfficer ?? {}),
+    JSON.stringify(detail.nonProfessionalStaff ?? {}),
+    JSON.stringify(detail.professionalStaff ?? []),
+    JSON.stringify(detail.documents ?? []),
+    JSON.stringify(detail.workflow ?? {}),
   ].join(" ");
 }
 
@@ -515,37 +525,31 @@ function sortLatestFirst(a: LightweightPortalFacilityDetailRecord, b: Lightweigh
   return (b.renewalYear ?? 0) - (a.renewalYear ?? 0) || cleanInline(b.capturedAt).localeCompare(cleanInline(a.capturedAt));
 }
 
-function buildPortalQaIndex(sourceMtimeMs: number): QaIndexedDetail[] {
-  const records = readPortalDetailsCacheLightweight().map((detail) => {
-    const qaFields = Object.fromEntries(
-      FIELD_DEFINITIONS
-        .map((field) => [field.intent, fieldValueForIntent(detail, field.intent)] as const)
-        .filter(([, value]) => cleanInline(value)),
-    ) as Partial<Record<FieldIntent, string>>;
+function qaDetailKey(detail: LightweightPortalFacilityDetailRecord) {
+  return cleanInline(detail.cacheKey)
+    || [detail.hefamaaId, detail.facilityName, detail.category, detail.renewalYear ?? ""].map((value) => normalizeToken(String(value ?? ""))).join("|");
+}
 
-    // The chat screen should not parse every saved portal page body just to answer
-    // common questions. We keep only searchable identity fields and extracted answers
-    // in this compact index, then rebuild it whenever the detail cache changes.
-    return {
-      applicationType: detail.applicationType,
-      cacheKey: detail.cacheKey,
-      capturedAt: detail.capturedAt,
-      category: detail.category,
-      facilityName: detail.facilityName,
-      hefamaaId: detail.hefamaaId,
-      normalizedStatus: detail.normalizedStatus,
-      qaFields,
-      qaIndexVersion: QA_INDEX_VERSION,
-      qaSearchText: detailSearchText(detail),
-      recordDate: detail.recordDate,
-      registrationStatus: detail.registrationStatus,
-      renewalYear: detail.renewalYear,
-      sourceRecord: detail.sourceRecord,
-      staffComplement: detail.staffComplement,
-      url: detail.url,
-      visibleFields: detail.visibleFields,
-    };
-  });
+function detailToQaIndexedDetail(detail: LightweightPortalFacilityDetailRecord): QaIndexedDetail {
+  const qaFields = Object.fromEntries(
+    FIELD_DEFINITIONS
+      .map((field) => [field.intent, fieldValueForIntent(detail, field.intent)] as const)
+      .filter(([, value]) => cleanInline(value)),
+  ) as Partial<Record<FieldIntent, string>>;
+
+  // The chat screen should not parse every saved portal page body just to answer
+  // common questions. We keep only searchable identity fields, structured detail
+  // sections, and extracted answers in this compact index.
+  return {
+    ...detail,
+    qaFields,
+    qaIndexVersion: QA_INDEX_VERSION,
+    qaSearchText: detailSearchText(detail),
+  };
+}
+
+function buildPortalQaIndex(sourceMtimeMs: number): QaIndexedDetail[] {
+  const records = readPortalDetailsCacheLightweight().map(detailToQaIndexedDetail);
 
   const file = qaIndexPath();
   try {
@@ -553,6 +557,38 @@ function buildPortalQaIndex(sourceMtimeMs: number): QaIndexedDetail[] {
     writeFileSync(file, JSON.stringify({ generatedAt: new Date().toISOString(), records, sourceMtimeMs, version: QA_INDEX_VERSION } satisfies PortalQaIndexFile));
   } catch {
     // If the index cannot be written, the in-memory records still make this request work.
+  }
+
+  qaIndexCache = { indexMtimeMs: safeMtime(file), records, sourceMtimeMs };
+  return records;
+}
+
+export function upsertPortalQaIndexDetail(detail: LightweightPortalFacilityDetailRecord) {
+  const sourceMtimeMs = safeMtime(portalDetailsPath());
+  if (!sourceMtimeMs) return [];
+
+  const file = qaIndexPath();
+  let records: QaIndexedDetail[] = [];
+  if (existsSync(file)) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as PortalQaIndexFile;
+      records = Array.isArray(parsed.records) ? parsed.records : [];
+    } catch {
+      records = [];
+    }
+  }
+
+  const nextRecord = detailToQaIndexedDetail(detail);
+  const nextKey = qaDetailKey(nextRecord);
+  const index = records.findIndex((record) => qaDetailKey(record) === nextKey);
+  if (index >= 0) records[index] = nextRecord;
+  else records.push(nextRecord);
+
+  try {
+    ensureRuntimeDataDirForFile(file);
+    writeFileSync(file, JSON.stringify({ generatedAt: new Date().toISOString(), records, sourceMtimeMs, version: QA_INDEX_VERSION } satisfies PortalQaIndexFile));
+  } catch {
+    return records;
   }
 
   qaIndexCache = { indexMtimeMs: safeMtime(file), records, sourceMtimeMs };

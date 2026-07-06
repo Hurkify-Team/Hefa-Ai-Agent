@@ -11,12 +11,18 @@ export type LightweightPortalFacilityRecord = {
   index?: number;
   lastSeen?: string;
   normalizedStatus?: string;
+  nonProfessionalStaff?: Record<string, unknown>;
   observationBeds?: number | null;
+  operatingOfficer?: Record<string, unknown>;
+  operations?: Record<string, unknown>;
+  professionalStaff?: Array<Record<string, unknown>>;
+  proprietorDetails?: Record<string, unknown>;
   recordDate?: string | null;
   registrationStatus?: string;
   renewalYear?: number | null;
   text?: string;
   visibleFields?: Record<string, string>;
+  workflow?: Record<string, unknown>;
 };
 
 export type LightweightPortalFacilityDetailRecord = {
@@ -28,12 +34,21 @@ export type LightweightPortalFacilityDetailRecord = {
   cacheKey?: string;
   capturedAt?: string;
   category?: string;
+  documents?: Array<{ available?: boolean | null; name?: string; status?: string; text?: string }>;
+  facilityDetails?: Record<string, unknown>;
   facilityName?: string;
+  facilityResources?: Record<string, unknown>;
   fieldIndex?: Record<string, string>;
   formFields?: unknown[];
+  identification?: Record<string, unknown>;
   hefamaaId?: string;
   normalizedStatus?: string;
+  nonProfessionalStaff?: Record<string, unknown>;
   observationBeds?: number | null;
+  operatingOfficer?: Record<string, unknown>;
+  operations?: Record<string, unknown>;
+  professionalStaff?: Array<Record<string, unknown>>;
+  proprietorDetails?: Record<string, unknown>;
   recordDate?: string | null;
   registrationStatus?: string;
   renewalYear?: number | null;
@@ -44,6 +59,7 @@ export type LightweightPortalFacilityDetailRecord = {
   text?: string;
   url?: string;
   visibleFields?: Record<string, string>;
+  workflow?: Record<string, unknown>;
 };
 
 type FileCache<T> = { mtimeMs: number; path: string; value: T };

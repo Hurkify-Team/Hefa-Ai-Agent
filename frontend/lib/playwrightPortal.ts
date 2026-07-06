@@ -5,6 +5,7 @@ import path from "node:path";
 
 import type { Browser, BrowserContext, Page } from "playwright";
 
+import { upsertPortalQaIndexDetail } from "@/lib/portalCacheQa";
 import { writePortalScanSnapshot } from "@/lib/portalScanSnapshots";
 import { configuredRuntimeFile, ensureRuntimeDataDirForFile } from "@/lib/runtimeData";
 
@@ -150,6 +151,7 @@ type PortalScanProgress = {
   bedsCapturedCount?: number;
   missingBedDataCount?: number;
   onlyMissingBeds?: boolean;
+  scanCompletionReport?: PortalScanCompletionReport;
   speedAnalytics?: PortalScanSpeedAnalytics;
   startedAt: string | null;
   status: PortalScanStatus;
@@ -175,6 +177,118 @@ type PortalBedDistribution = {
   couches: number | null;
 };
 
+type PortalIdentificationDetails = {
+  facilityName: string;
+  facilityCode: string;
+  portalFacilityId: string;
+  facilitySector: string;
+  facilityCategory: string;
+  registrationStatus: string;
+  registrationType: string;
+  registrationRenewalYear: number | null;
+  currentWorkflowStatus: string;
+};
+
+type PortalFacilityDetails = {
+  cacNumber: string;
+  multipleBranches: string;
+  phoneNumber: string;
+  emailAddress: string;
+  physicalAddress: string;
+  lga: string;
+  lcda: string;
+  closestLandmark: string;
+  gpsCoordinates: string;
+  buildingType: string;
+  otherUsesOfPremises: string;
+};
+
+type PortalProprietorDetails = {
+  proprietorName: string;
+  proprietorAddress: string;
+  nationality: string;
+  occupation: string;
+};
+
+type PortalOperationsDetails = {
+  openingTime: string;
+  closingTime: string;
+  dateOfEstablishment: string;
+  ambulanceService: string;
+  emergencyService: string;
+  scopeOfServices: string;
+};
+
+type PortalFacilityResources = {
+  toilets: string;
+  waterSource: string;
+  powerSource: string;
+  humanWasteDisposal: string;
+  refuseDisposal: string;
+  medicalWasteDisposal: string;
+  basicProtectiveItems: string;
+};
+
+type PortalOperatingOfficerDetails = {
+  fullName: string;
+  address: string;
+  nationality: string;
+  qualifications: string;
+  registrationNumber: string;
+  registrationYear: string;
+  institution: string;
+  regulatoryAuthority: string;
+};
+
+type PortalProfessionalStaffMember = {
+  name: string;
+  complement: string;
+  employmentType: string;
+  qualification: string;
+  institution: string;
+  yearQualified: string;
+  registrationNumber: string;
+  postQualification: string;
+  text: string;
+  values: string[];
+};
+
+type PortalNonProfessionalStaff = {
+  hospitalAttendants: number | null;
+  administrativeStaff: number | null;
+  securityStaff: number | null;
+  others: string;
+};
+
+type PortalDocumentStatus = {
+  name: string;
+  status: string;
+  available: boolean | null;
+  text: string;
+};
+
+type PortalWorkflowDetails = {
+  queries: string;
+  documentQuery: string;
+  uploadPaymentDocumentApprovalPending: string;
+  paymentApprovedDocumentApprovalPending: string;
+  documentApprovedInspectionReportPending: string;
+  inspectionReportUploadInspectionApprovalPending: string;
+  finalApprovalPending: string;
+  registrationApprovedDate: string;
+  lastActivityDate: string;
+};
+
+type PortalScanCompletionReport = {
+  averageCaptureTimeSeconds: number | null;
+  failedFacilities: number;
+  facilitiesUpdated: number;
+  missingFields: Record<string, number>;
+  newFieldsCaptured: number;
+  skippedFacilities: number;
+  totalScanTimeSeconds: number | null;
+};
+
 export type PortalFacilityDetailRecord = {
   admissionBeds: number | null;
   applicationType: PortalApplicationType;
@@ -185,12 +299,21 @@ export type PortalFacilityDetailRecord = {
   capturedAt: string;
   category: string;
   facilityName: string;
+  documents?: PortalDocumentStatus[];
+  facilityDetails?: PortalFacilityDetails;
+  facilityResources?: PortalFacilityResources;
+  identification?: PortalIdentificationDetails;
   fieldIndex: Record<string, string>;
   formFields: VisibleFormField[];
   hefamaaId: string;
   normalizedStatus: PortalFacilityStatus;
+  nonProfessionalStaff?: PortalNonProfessionalStaff;
+  operatingOfficer?: PortalOperatingOfficerDetails;
+  operations?: PortalOperationsDetails;
   observationBeds: number | null;
   recordDate?: string | null;
+  professionalStaff?: PortalProfessionalStaffMember[];
+  proprietorDetails?: PortalProprietorDetails;
   registrationStatus: string;
   renewalYear: number | null;
   sourceRecord: PortalFacilityRecord;
@@ -200,6 +323,7 @@ export type PortalFacilityDetailRecord = {
   text: string;
   url: string;
   visibleFields: Record<string, string>;
+  workflow?: PortalWorkflowDetails;
   captureWarnings?: string[];
   scanMode?: PortalScanMode;
   recapturedAt?: string;
@@ -2215,10 +2339,18 @@ function textValueByLabel(text: string, labels: string[]) {
 
   for (const label of labels) {
     const pattern = new RegExp("^" + escapeRegExp(label) + "\\s*[:\\-]?\\s*(.+)$", "i");
+    const normalizedLabel = normalizeRequiredDetailLabel(label);
 
-    for (const line of lines) {
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
       const match = line.match(pattern);
       if (match?.[1]) return cleanPortalText(match[1]);
+
+      const normalizedLine = normalizeRequiredDetailLabel(line.replace(/[:\-]+$/, ""));
+      if (normalizedLine && normalizedLabel && (normalizedLine === normalizedLabel || normalizedLine.endsWith(" " + normalizedLabel))) {
+        const next = cleanPortalText(lines[index + 1]);
+        if (next && normalizeRequiredDetailLabel(next) !== normalizedLabel) return next;
+      }
     }
   }
 
@@ -3063,22 +3195,71 @@ function addDetailField(fields: Record<string, string>, label: unknown, value: u
 }
 
 
-const REQUIRED_DETAIL_FIELD_ALIASES: Record<string, string[]> = {
+const PORTAL_DETAIL_FIELD_ALIASES: Record<string, string[]> = {
   "Facility Name": ["facility name", "name of facility", "organisation name", "organization name"],
   "HEFA NO": ["hef/no", "hef no", "hefa no", "hefamaa no", "hefa number", "facility code", "facility id", "registration number", "permit number"],
-  Category: ["category", "facility type", "type of facility", "facility category"],
-  Status: ["status", "registration status", "approval status", "application status"],
-  Address: ["address", "facility address", "location address", "practice address"],
+  "Portal Facility ID": ["portal facility id", "portal id", "application id", "facility id", "hf id"],
+  "Facility Sector": ["facility sector", "sector"],
+  "Facility Category": ["facility category", "category", "facility type", "type of facility"],
+  "Registration Status": ["registration status", "approval status", "application status", "status"],
+  "Registration Type": ["registration type", "application type", "type of registration"],
+  "Registration/Renewal Year": ["registration year", "renewal year", "year", "application year"],
+  "Current Workflow Status": ["current workflow status", "workflow status", "current status", "status"],
+  "CAC Number": ["cac number", "cac no", "cac registration number", "registration certificate number"],
+  "Multiple Branches": ["multiple branches", "branch", "branches", "annex"],
+  "Phone Number": ["phone number", "phone", "telephone", "contact", "mobile", "facility phone", "facility contact"],
+  "Email Address": ["email address", "email", "e-mail", "mail", "facility email"],
+  "Physical Address": ["physical address", "address", "facility address", "location address", "practice address"],
   LGA: ["lga", "local government", "local government area"],
   LCDA: ["lcda", "local council development area"],
-  Phone: ["phone", "telephone", "contact", "mobile", "facility phone", "facility contact"],
-  Email: ["email", "e-mail", "mail", "facility email"],
-  Proprietor: ["proprietor", "owner", "owner's name", "owners name", "proprietor name"],
-  "Operating Officer": ["medical professional in charge", "medical officer in charge", "operating officer", "officer in charge", "professional in charge"],
-  "Admission Beds": ["admission bed", "admission beds", "no of admission beds"],
-  "Observation Beds": ["observation bed", "observation beds", "no of observation beds"],
+  "Closest Landmark": ["closest landmark", "landmark", "nearest landmark"],
+  "GPS Coordinates": ["gps coordinates", "gps", "coordinates", "latitude", "longitude"],
+  "Building Type": ["building type", "type of building"],
+  "Other Uses of Premises": ["other uses of premises", "other use of premises", "premises use", "other uses"],
+  "Proprietor Name": ["proprietor name", "proprietor", "owner", "owner's name", "owners name"],
+  "Proprietor Address": ["proprietor address", "owner address", "owner's address", "owners address"],
+  "Proprietor Nationality": ["proprietor nationality", "owner nationality", "nationality"],
+  "Proprietor Occupation": ["proprietor occupation", "owner occupation", "occupation"],
+  "Opening Time": ["opening time", "opening hour", "opening hours", "open time"],
+  "Closing Time": ["closing time", "closing hour", "closing hours", "close time"],
+  "Date of Establishment": ["date of establishment", "establishment date", "date established"],
+  "Ambulance Service": ["ambulance service", "ambulance"],
+  "Emergency Service": ["emergency service", "emergency"],
+  "Scope of Services": ["scope of service", "scope of services", "services rendered", "service scope"],
+  "Admission Beds": ["admission bed", "admission beds", "no of admission beds", "number of admission beds"],
+  "Observation Beds": ["observation bed", "observation beds", "no of observation beds", "number of observation beds"],
   Couches: ["no of couches", "couches", "couch", "number of couches"],
+  Toilets: ["toilets", "toilet", "number of toilets"],
+  "Water Source": ["water source", "source of water", "water supply"],
+  "Power Source": ["power source", "source of power", "electricity source", "power supply"],
+  "Human Waste Disposal": ["human waste disposal", "sewage disposal", "waste disposal human"],
+  "Refuse Disposal": ["refuse disposal", "solid waste disposal", "waste disposal refuse"],
+  "Medical Waste Disposal": ["medical waste disposal", "clinical waste disposal", "healthcare waste disposal"],
+  "Basic Protective Items": ["basic protective items", "protective items", "ppe", "personal protective equipment"],
+  "Operating Officer Full Name": ["medical professional in charge", "medical officer in charge", "operating officer", "officer in charge", "professional in charge", "person in charge", "full name"],
+  "Operating Officer Address": ["operating officer address", "medical professional in charge address", "officer in charge address", "professional in charge address"],
+  "Operating Officer Nationality": ["operating officer nationality", "medical professional in charge nationality", "officer nationality"],
+  "Operating Officer Qualifications": ["operating officer qualifications", "qualification", "qualifications", "medical professional qualification"],
+  "Operating Officer Registration Number": ["operating officer registration number", "registration number", "registration no", "reg no", "folio number", "license number", "licence number"],
+  "Operating Officer Registration Year": ["operating officer registration year", "registration year", "year registered"],
+  "Operating Officer Institution": ["operating officer institution", "institution", "school", "institution attended"],
+  "Operating Officer Regulatory Authority": ["operating officer regulatory authority", "regulatory authority", "professional body", "council"],
+  "Hospital Attendants": ["hospital attendants", "hospital attendant", "attendants"],
+  "Administrative Staff": ["administrative staff", "admin staff", "administrators"],
+  "Security Staff": ["security staff", "security", "security guards"],
+  "Other Non Professional Staff": ["other non professional staff", "others", "other staff"],
+  Queries: ["queries", "query", "query reason", "query details"],
+  "Document Query": ["document query", "documents queried", "document queried", "queried document"],
+  "Upload Payment/Document Approval Pending": ["upload payment/document approval pending", "upload payment and pending document approval", "upload payment pending document approval"],
+  "Payment Approved/Document Approval Pending": ["payment approved/document approval pending", "payment approved and pending document approval", "payment approved pending document approval"],
+  "Document Approved/Inspection Report Pending": ["document approved/inspection report pending", "document approved inspection report pending", "document approved inspection reporting pending"],
+  "Inspection Report Upload/Inspection Approval Pending": ["inspection report upload/inspection approval pending", "inspection report upload pending approval", "inspection approval pending"],
+  "Final Approval Pending": ["final approval pending"],
+  "Registration Approved Date": ["registration approved date", "approval date", "approved date"],
+  "Last Activity Date": ["last activity date", "last activity", "activity date"],
 };
+
+const REQUIRED_DETAIL_FIELD_ALIASES: Record<string, string[]> = PORTAL_DETAIL_FIELD_ALIASES;
 
 function normalizeRequiredDetailLabel(value: string) {
   return cleanPortalText(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -3176,6 +3357,255 @@ function buildDetailFieldIndex(input: {
   });
 
   return fields;
+}
+
+function detailValue(fields: Record<string, string>, label: string) {
+  return findFieldValueByAliases(fields, PORTAL_DETAIL_FIELD_ALIASES[label] ?? [label]);
+}
+
+function parsePortalYear(value: unknown) {
+  const match = cleanPortalText(String(value ?? "")).match(/\b(20\d{2}|19\d{2})\b/);
+  return match ? Number(match[1]) : null;
+}
+
+function parseNullablePortalNumber(value: unknown) {
+  const parsed = parsePortalBedNumber(value);
+  return parsed === null ? null : parsed;
+}
+
+function canonicalFieldEntries(fields: Record<string, string>) {
+  return Object.fromEntries(
+    Object.keys(PORTAL_DETAIL_FIELD_ALIASES).map((label) => [label, detailValue(fields, label)] as const),
+  ) as Record<string, string>;
+}
+
+function buildIdentificationDetails(fields: Record<string, string>, sourceRecord: PortalFacilityRecord): PortalIdentificationDetails {
+  const canonical = canonicalFieldEntries(fields);
+  return {
+    facilityName: canonical["Facility Name"] || sourceRecord.facilityName,
+    facilityCode: canonical["HEFA NO"] || sourceRecord.hefamaaId,
+    portalFacilityId: canonical["Portal Facility ID"] || sourceRecord.hefamaaId,
+    facilitySector: canonical["Facility Sector"],
+    facilityCategory: canonical["Facility Category"] || sourceRecord.category,
+    registrationStatus: canonical["Registration Status"] || sourceRecord.registrationStatus,
+    registrationType: canonical["Registration Type"] || sourceRecord.applicationType,
+    registrationRenewalYear: parsePortalYear(canonical["Registration/Renewal Year"]) ?? sourceRecord.renewalYear,
+    currentWorkflowStatus: canonical["Current Workflow Status"] || sourceRecord.registrationStatus,
+  };
+}
+
+function buildFacilityDetails(fields: Record<string, string>): PortalFacilityDetails {
+  return {
+    cacNumber: detailValue(fields, "CAC Number"),
+    multipleBranches: detailValue(fields, "Multiple Branches"),
+    phoneNumber: detailValue(fields, "Phone Number"),
+    emailAddress: detailValue(fields, "Email Address"),
+    physicalAddress: detailValue(fields, "Physical Address"),
+    lga: detailValue(fields, "LGA"),
+    lcda: detailValue(fields, "LCDA"),
+    closestLandmark: detailValue(fields, "Closest Landmark"),
+    gpsCoordinates: detailValue(fields, "GPS Coordinates"),
+    buildingType: detailValue(fields, "Building Type"),
+    otherUsesOfPremises: detailValue(fields, "Other Uses of Premises"),
+  };
+}
+
+function buildProprietorDetails(fields: Record<string, string>): PortalProprietorDetails {
+  return {
+    proprietorName: detailValue(fields, "Proprietor Name"),
+    proprietorAddress: detailValue(fields, "Proprietor Address"),
+    nationality: detailValue(fields, "Proprietor Nationality"),
+    occupation: detailValue(fields, "Proprietor Occupation"),
+  };
+}
+
+function buildOperationsDetails(fields: Record<string, string>): PortalOperationsDetails {
+  return {
+    openingTime: detailValue(fields, "Opening Time"),
+    closingTime: detailValue(fields, "Closing Time"),
+    dateOfEstablishment: detailValue(fields, "Date of Establishment"),
+    ambulanceService: detailValue(fields, "Ambulance Service"),
+    emergencyService: detailValue(fields, "Emergency Service"),
+    scopeOfServices: detailValue(fields, "Scope of Services"),
+  };
+}
+
+function buildFacilityResources(fields: Record<string, string>): PortalFacilityResources {
+  return {
+    toilets: detailValue(fields, "Toilets"),
+    waterSource: detailValue(fields, "Water Source"),
+    powerSource: detailValue(fields, "Power Source"),
+    humanWasteDisposal: detailValue(fields, "Human Waste Disposal"),
+    refuseDisposal: detailValue(fields, "Refuse Disposal"),
+    medicalWasteDisposal: detailValue(fields, "Medical Waste Disposal"),
+    basicProtectiveItems: detailValue(fields, "Basic Protective Items"),
+  };
+}
+
+function buildOperatingOfficerDetails(fields: Record<string, string>): PortalOperatingOfficerDetails {
+  return {
+    fullName: detailValue(fields, "Operating Officer Full Name"),
+    address: detailValue(fields, "Operating Officer Address"),
+    nationality: detailValue(fields, "Operating Officer Nationality"),
+    qualifications: detailValue(fields, "Operating Officer Qualifications"),
+    registrationNumber: detailValue(fields, "Operating Officer Registration Number"),
+    registrationYear: detailValue(fields, "Operating Officer Registration Year"),
+    institution: detailValue(fields, "Operating Officer Institution"),
+    regulatoryAuthority: detailValue(fields, "Operating Officer Regulatory Authority"),
+  };
+}
+
+function buildNonProfessionalStaff(fields: Record<string, string>): PortalNonProfessionalStaff {
+  return {
+    hospitalAttendants: parseNullablePortalNumber(detailValue(fields, "Hospital Attendants")),
+    administrativeStaff: parseNullablePortalNumber(detailValue(fields, "Administrative Staff")),
+    securityStaff: parseNullablePortalNumber(detailValue(fields, "Security Staff")),
+    others: detailValue(fields, "Other Non Professional Staff"),
+  };
+}
+
+function buildWorkflowDetails(fields: Record<string, string>): PortalWorkflowDetails {
+  return {
+    queries: detailValue(fields, "Queries"),
+    documentQuery: detailValue(fields, "Document Query"),
+    uploadPaymentDocumentApprovalPending: detailValue(fields, "Upload Payment/Document Approval Pending"),
+    paymentApprovedDocumentApprovalPending: detailValue(fields, "Payment Approved/Document Approval Pending"),
+    documentApprovedInspectionReportPending: detailValue(fields, "Document Approved/Inspection Report Pending"),
+    inspectionReportUploadInspectionApprovalPending: detailValue(fields, "Inspection Report Upload/Inspection Approval Pending"),
+    finalApprovalPending: detailValue(fields, "Final Approval Pending"),
+    registrationApprovedDate: detailValue(fields, "Registration Approved Date"),
+    lastActivityDate: detailValue(fields, "Last Activity Date"),
+  };
+}
+
+function tableHeaderIndex(headers: string[], aliases: string[]) {
+  const normalizedAliases = aliases.map(normalizeRequiredDetailLabel).filter(Boolean);
+  return headers.findIndex((header) => {
+    const normalized = normalizeRequiredDetailLabel(header);
+    return normalizedAliases.some((alias) => normalized === alias || normalized.includes(alias) || alias.includes(normalized));
+  });
+}
+
+function rowValueByHeader(headers: string[], row: string[], aliases: string[]) {
+  const index = tableHeaderIndex(headers, aliases);
+  return index >= 0 ? cleanPortalText(row[index]) : "";
+}
+
+function extractProfessionalStaffMembers(tables: string[][][]): PortalProfessionalStaffMember[] {
+  const members: PortalProfessionalStaffMember[] = [];
+
+  for (const table of tables) {
+    const headers = (table[0] ?? []).map(cleanPortalText);
+    const headerText = headers.join(" ").toLowerCase();
+    const looksLikeStaffTable = /name/.test(headerText) && /(complement|employment|qualification|institution|registration|post qualification|profession|staff)/.test(headerText);
+    if (!looksLikeStaffTable) continue;
+
+    for (const row of table.slice(1)) {
+      const values = row.map(cleanPortalText).filter(Boolean);
+      if (!values.length) continue;
+      const text = values.join(" | ");
+      const member: PortalProfessionalStaffMember = {
+        name: rowValueByHeader(headers, row, ["name", "full name", "staff name"]),
+        complement: rowValueByHeader(headers, row, ["complement", "profession", "designation", "cadre"]),
+        employmentType: rowValueByHeader(headers, row, ["employment type", "type of employment", "employment"]),
+        qualification: rowValueByHeader(headers, row, ["qualification", "qualifications"]),
+        institution: rowValueByHeader(headers, row, ["institution", "school", "institution attended"]),
+        yearQualified: rowValueByHeader(headers, row, ["year qualified", "qualification year", "year"]),
+        registrationNumber: rowValueByHeader(headers, row, ["registration number", "registration no", "reg no", "folio", "license", "licence"]),
+        postQualification: rowValueByHeader(headers, row, ["post qualification", "post-qualification", "post qualification experience"]),
+        text,
+        values,
+      };
+      if (!member.name && values.length <= 2) continue;
+      members.push(member);
+    }
+  }
+
+  return members;
+}
+
+const DOCUMENT_ALIASES = [
+  "CAC Registration Certificate",
+  "Tax Clearance Certificate",
+  "LAWMA Certificate",
+  "HMIS Clearance",
+  "Last Renewal Certificate",
+  "Professional Association Letter",
+];
+
+function documentAvailability(text: string) {
+  const normalized = normalizeRequiredDetailLabel(text);
+  if (!normalized) return null;
+  if (/not uploaded|missing|not available|pending|no file|absent/.test(normalized)) return false;
+  if (/uploaded|available|approved|submitted|yes|view|download/.test(normalized)) return true;
+  return null;
+}
+
+function extractDocumentStatuses(fields: Record<string, string>, tables: string[][][]): PortalDocumentStatus[] {
+  const byName = new Map<string, PortalDocumentStatus>();
+  const push = (name: string, status: string, text: string) => {
+    const cleanName = cleanPortalText(name);
+    const cleanStatus = cleanPortalText(status || text);
+    if (!cleanName || !cleanStatus) return;
+    byName.set(normalizeRequiredDetailLabel(cleanName), {
+      name: cleanName,
+      status: cleanStatus,
+      available: documentAvailability(cleanStatus),
+      text: cleanPortalText(text || cleanName + " " + cleanStatus),
+    });
+  };
+
+  for (const label of DOCUMENT_ALIASES) {
+    const value = findFieldValueByAliases(fields, [label]);
+    if (value) push(label, value, label + ": " + value);
+  }
+
+  for (const table of tables) {
+    const tableText = table.flat().join(" ").toLowerCase();
+    if (!/(document|certificate|clearance|uploaded|lawma|hmis|cac|tax|renewal|association)/.test(tableText)) continue;
+    const headers = (table[0] ?? []).map(cleanPortalText);
+    const nameIndex = tableHeaderIndex(headers, ["document", "document name", "certificate", "requirement", "file"]);
+    const statusIndex = tableHeaderIndex(headers, ["status", "availability", "uploaded", "approval", "remark"]);
+    for (const row of table.slice(1)) {
+      const values = row.map(cleanPortalText).filter(Boolean);
+      if (!values.length) continue;
+      const rowText = values.join(" | ");
+      const name = nameIndex >= 0 ? row[nameIndex] : values.find((value) => /(certificate|clearance|document|lawma|hmis|cac|tax|renewal|association)/i.test(value)) ?? values[0];
+      const status = statusIndex >= 0 ? row[statusIndex] : values.filter((value) => value !== name).join(" | ");
+      push(name, status, rowText);
+    }
+  }
+
+  return Array.from(byName.values());
+}
+
+function flattenObjectFields(prefix: string, value: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, item]) => [prefix + " " + key.replace(/[A-Z]/g, (letter) => " " + letter).replace(/^./, (letter) => letter.toUpperCase()).trim(), cleanPortalText(String(item ?? ""))] as const)
+      .filter(([, item]) => item),
+  );
+}
+
+function countStructuredCapturedFields(detail: Pick<PortalFacilityDetailRecord, "identification" | "facilityDetails" | "proprietorDetails" | "operations" | "facilityResources" | "operatingOfficer" | "nonProfessionalStaff" | "workflow" | "professionalStaff" | "documents" | "bedDistribution">) {
+  let count = 0;
+  const objects = [detail.identification, detail.facilityDetails, detail.proprietorDetails, detail.operations, detail.facilityResources, detail.operatingOfficer, detail.nonProfessionalStaff, detail.workflow, detail.bedDistribution];
+  for (const object of objects) {
+    for (const value of Object.values(object ?? {})) {
+      if (typeof value === "number" || cleanPortalText(String(value ?? ""))) count += 1;
+    }
+  }
+  count += detail.professionalStaff?.length ?? 0;
+  count += detail.documents?.length ?? 0;
+  return count;
+}
+
+function aggregateMissingFields(current: Record<string, number>, warnings: string[]) {
+  for (const warning of warnings) {
+    const label = warning.replace(/\s+not captured within timeout\.?$/i, "");
+    current[label] = (current[label] ?? 0) + 1;
+  }
+  return current;
 }
 
 function numericDetailValue(fields: Record<string, string>, aliases: string[]) {
@@ -3307,8 +3737,18 @@ async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacil
     ...requiredFields,
     ...buildDetailFieldIndex({ bodyText, formFields, sourceRecord, tables }),
   };
+  const identification = buildIdentificationDetails(fieldIndex, sourceRecord);
+  const facilityDetails = buildFacilityDetails(fieldIndex);
+  const proprietorDetails = buildProprietorDetails(fieldIndex);
+  const operations = buildOperationsDetails(fieldIndex);
+  const facilityResources = buildFacilityResources(fieldIndex);
+  const operatingOfficer = buildOperatingOfficerDetails(fieldIndex);
+  const nonProfessionalStaff = buildNonProfessionalStaff(fieldIndex);
+  const workflow = buildWorkflowDetails(fieldIndex);
+  const professionalStaff = extractProfessionalStaffMembers(tables);
+  const documents = extractDocumentStatuses(fieldIndex, tables);
   const captureWarnings = Object.keys(REQUIRED_DETAIL_FIELD_ALIASES)
-    .filter((label) => !cleanPortalText(fieldIndex[label]))
+    .filter((label) => !cleanPortalText(fieldIndex[label]) && !detailValue(fieldIndex, label))
     .map((label) => label + " not captured within timeout.");
   bedDistribution = bedDistributionFromFields({ ...fieldIndex, ...requiredFields });
   if (Object.values(bedDistribution).some((value) => value === null)) {
@@ -3332,10 +3772,23 @@ async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacil
         "Professional Staff Rows Captured": String(staffDetails.length),
       }
     : {};
+  const structuredFields = {
+    ...flattenObjectFields("Identification", identification),
+    ...flattenObjectFields("Facility", facilityDetails),
+    ...flattenObjectFields("Proprietor", proprietorDetails),
+    ...flattenObjectFields("Operations", operations),
+    ...flattenObjectFields("Resources", facilityResources),
+    ...flattenObjectFields("Operating Officer", operatingOfficer),
+    ...flattenObjectFields("Non Professional Staff", nonProfessionalStaff),
+    ...flattenObjectFields("Workflow", workflow),
+    "Professional Staff Rows Captured": professionalStaff.length ? String(professionalStaff.length) : "",
+    "Documents Captured": documents.length ? String(documents.length) : "",
+  };
   const visibleFields = {
     ...(sourceRecord.visibleFields ?? {}),
     ...Object.fromEntries(formFields.map((field) => [field.label, field.value])),
     ...fieldIndex,
+    ...structuredFields,
     ...staffFields,
     ...staffDetailFields,
     ...(captureWarnings.length ? { "Capture Warnings": captureWarnings.join("; ") } : {}),
@@ -3352,12 +3805,21 @@ async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacil
     capturedAt: new Date().toISOString(),
     captureWarnings,
     category: sourceRecord.category,
+    documents,
+    facilityDetails,
     facilityName: sourceRecord.facilityName,
+    facilityResources,
     fieldIndex,
     formFields,
+    identification,
     hefamaaId: sourceRecord.hefamaaId,
     normalizedStatus: sourceRecord.normalizedStatus,
+    nonProfessionalStaff,
+    operatingOfficer,
+    operations,
     observationBeds: bedDistribution.observationBeds,
+    professionalStaff,
+    proprietorDetails,
     recordDate: sourceRecord.recordDate ?? null,
     registrationStatus: sourceRecord.registrationStatus,
     renewalYear: sourceRecord.renewalYear,
@@ -3368,6 +3830,7 @@ async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacil
     text,
     url: page.url(),
     visibleFields,
+    workflow,
   };
 }
 
@@ -3582,6 +4045,8 @@ async function capturePortalFacilityDetails(
   let skippedDetails = 0;
   let bedsCapturedCount = 0;
   let missingBedDataCount = 0;
+  let newFieldsCaptured = 0;
+  let missingFields: Record<string, number> = {};
   let failedDueToTimeout = 0;
   let slowCaptures = 0;
   const captureTimings: Array<{ facilityName: string; seconds: number }> = [];
@@ -3830,6 +4295,13 @@ async function capturePortalFacilityDetails(
         if (portalDetailHasAnyBedData(detailToSave)) bedsCapturedCount += 1;
         if (!portalDetailHasCompleteBedData(detailToSave)) missingBedDataCount += 1;
         writePortalFacilityDetailsCache(detailRecords);
+        try {
+          upsertPortalQaIndexDetail(detailToSave);
+        } catch (indexError) {
+          console.warn("[portal/scan] QA index update failed", scanErrorMessage(indexError));
+        }
+        newFieldsCaptured += countStructuredCapturedFields(detailToSave);
+        missingFields = aggregateMissingFields(missingFields, detailToSave.captureWarnings ?? []);
         captureTimings.push({ facilityName, seconds: lastDurationMs / 1000 });
         captured = true;
 
@@ -3983,6 +4455,11 @@ async function capturePortalFacilityDetails(
   }
 
   writePortalFacilityDetailsCache(detailRecords);
+  const startedAtMs = portalRuntime.scanProgress.startedAt ? Date.parse(portalRuntime.scanProgress.startedAt) : Number.NaN;
+  const totalScanTimeSeconds = Number.isFinite(startedAtMs) ? Math.max(0, (Date.now() - startedAtMs) / 1000) : null;
+  const averageCaptureTimeSeconds = captureTimings.length
+    ? captureTimings.reduce((total, item) => total + item.seconds, 0) / captureTimings.length
+    : null;
   updatePortalScanProgress({
     bedsCapturedCount,
     currentFacilityHefamaaId: null,
@@ -3991,6 +4468,15 @@ async function capturePortalFacilityDetails(
     missingBedDataCount,
     recapturedDetails,
     remainingDetails: Math.max(0, recordsToCapture.length - scannedDetails - skippedDetails - failedDetails),
+    scanCompletionReport: {
+      averageCaptureTimeSeconds,
+      failedFacilities: failedDetails,
+      facilitiesUpdated: scannedDetails,
+      missingFields,
+      newFieldsCaptured,
+      skippedFacilities: skippedDetails,
+      totalScanTimeSeconds,
+    },
     scannedDetails,
     skippedDetails,
     slowCaptures,
@@ -4402,7 +4888,13 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick", op
     }
 
     throwIfPortalScanStopped();
-    const detailTargetRecords = latestDetailTargetRecords(datedRecords);
+    const detailTargetRecords = mode === "fresh_full_scan"
+      ? latestUniqueFacilityRecords(datedRecords).sort((a, b) => {
+          const familyOrder = facilityRecordFamilyKey(a).localeCompare(facilityRecordFamilyKey(b));
+          if (familyOrder) return familyOrder;
+          return facilityRecordKey(a).localeCompare(facilityRecordKey(b));
+        })
+      : latestDetailTargetRecords(datedRecords);
     const detailRecords = isDetailScan
       ? await capturePortalFacilityDetails(scanPage, detailTargetRecords, {
           fresh: mode === "fresh_full_scan",
@@ -4548,6 +5040,7 @@ export async function startPortalFacilityScan(input: { mode?: PortalScanMode; on
       message: mode === "fresh_full_scan" ? "Fresh Full Scan started." : mode === "full" ? "Full detail scan started." : "Quick portal scan started.",
       status: "info",
     })],
+    scanCompletionReport: undefined,
     scanMode: mode,
     scannedDetails: 0,
     recapturedDetails: 0,

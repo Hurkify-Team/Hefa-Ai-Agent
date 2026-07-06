@@ -54,6 +54,7 @@ type PortalFacilitySummary = {
   statusCounts: Record<string, number>;
   scanProgress: {
     completedAt: string | null;
+    keepAwakeActive?: boolean;
     openTabsCount?: number;
     scanId?: string | null;
     stopRequested?: boolean;
@@ -79,6 +80,15 @@ type PortalFacilitySummary = {
     skippedDetails?: number;
     slowCaptures?: number;
     remainingDetails?: number;
+    scanCompletionReport?: {
+      averageCaptureTimeSeconds: number | null;
+      failedFacilities: number;
+      facilitiesUpdated: number;
+      missingFields: Record<string, number>;
+      newFieldsCaptured: number;
+      skippedFacilities: number;
+      totalScanTimeSeconds: number | null;
+    };
     speedAnalytics?: {
       averageSecondsPerFacility: number | null;
       capturedSamples: number;
@@ -1216,6 +1226,40 @@ export default function PortalScanPage() {
                           Slowest: {speedAnalytics?.slowestFacility ? formatSecondsPerFacility(speedAnalytics.slowestFacility.seconds) + " - " + speedAnalytics.slowestFacility.facilityName : "-"}
                         </p>
                       </div>
+                    </div>
+                  ) : null}
+
+                  {isDetailScanMode && scanProgress?.scanCompletionReport ? (
+                    <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 shadow-sm">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-emerald-700">Fresh Scan Completion Report</p>
+                          <p className="mt-1 text-[13px] font-semibold text-slate-700">Complete portal detail cache rebuild summary.</p>
+                        </div>
+                        <span className="rounded-full bg-white px-3 py-1 text-[11px] font-extrabold text-emerald-700 ring-1 ring-emerald-200">
+                          Updated {formatCount(scanProgress.scanCompletionReport.facilitiesUpdated)}
+                        </span>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                        {[
+                          ["Facilities Updated", formatCount(scanProgress.scanCompletionReport.facilitiesUpdated)],
+                          ["New Fields Captured", formatCount(scanProgress.scanCompletionReport.newFieldsCaptured)],
+                          ["Failed Facilities", formatCount(scanProgress.scanCompletionReport.failedFacilities)],
+                          ["Skipped Facilities", formatCount(scanProgress.scanCompletionReport.skippedFacilities)],
+                          ["Total Scan Time", formatDurationFromSeconds(scanProgress.scanCompletionReport.totalScanTimeSeconds)],
+                          ["Avg Capture", formatSecondsPerFacility(scanProgress.scanCompletionReport.averageCaptureTimeSeconds)],
+                        ].map(([label, value]) => (
+                          <div className="rounded-lg border border-white/80 bg-white/85 p-3" key={label}>
+                            <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+                            <p className="mt-1 text-[15px] font-extrabold text-slate-950">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+                      {Object.keys(scanProgress.scanCompletionReport.missingFields).length ? (
+                        <p className="mt-3 text-[12px] font-semibold text-amber-800">
+                          Missing fields detected: {Object.entries(scanProgress.scanCompletionReport.missingFields).slice(0, 8).map(([field, count]) => field + " (" + count + ")").join(", ")}
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
 

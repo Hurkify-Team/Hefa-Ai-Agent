@@ -158,7 +158,10 @@ export function buildPortalWorkflowSummary(rows: PortalCacheRow[] = readPortalCa
 export function buildPortalWorkflowDiagnostics(rows: PortalCacheRow[] = readPortalCacheRows()) {
   const rawStatusCounts = new Map<string, number>();
   const normalizedStatusMapping: Record<string, PortalWorkflowStatus | "UNKNOWN"> = {};
-  const sampleFacilities = Object.fromEntries(PORTAL_WORKFLOW_STATUSES.map((status) => [status, []])) as Record<PortalWorkflowStatus, PortalWorkflowFacility[]>;
+  const sampleFacilities = PORTAL_WORKFLOW_STATUSES.reduce((acc, status) => {
+    acc[status] = [];
+    return acc;
+  }, {} as Record<PortalWorkflowStatus, PortalWorkflowFacility[]>);
   const unknownFacilities: Array<{ facilityName: string | null; facilityCode: string | null; rawStatus: string }> = [];
 
   for (const row of rows) {
