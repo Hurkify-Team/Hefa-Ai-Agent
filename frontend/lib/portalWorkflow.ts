@@ -7,9 +7,11 @@ export const PORTAL_WORKFLOW_STATUSES = [
   "DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING",
   "INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING",
   "FINAL_APPROVAL_PENDING",
+  "REGISTRATION_APPROVED",
 ] as const;
 
 export type PortalWorkflowStatus = (typeof PORTAL_WORKFLOW_STATUSES)[number];
+export type PortalFacilitySector = "PUBLIC" | "PRIVATE" | "UNKNOWN";
 
 export const PORTAL_WORKFLOW_LABELS: Record<PortalWorkflowStatus, string> = {
   DOCUMENT_QUERY: "Document Query",
@@ -18,6 +20,7 @@ export const PORTAL_WORKFLOW_LABELS: Record<PortalWorkflowStatus, string> = {
   DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING: "Document Approved/Inspection Report Pending",
   INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING: "Inspection Report Upload/Inspection Approval Pending",
   FINAL_APPROVAL_PENDING: "Final Approval Pending",
+  REGISTRATION_APPROVED: "Registration Approved",
 };
 
 export type PortalWorkflowFacility = {
@@ -26,6 +29,7 @@ export type PortalWorkflowFacility = {
   facilityCode: string | null;
   category: string | null;
   lga: string | null;
+  sector: PortalFacilitySector;
   currentWorkflowStatus: PortalWorkflowStatus;
   currentWorkflowStatusLabel: string;
   lastActivityDate: string | null;
@@ -36,6 +40,7 @@ export type PortalWorkflowFacility = {
 type WorkflowSummary = {
   totalPortalRecords: number;
   statusCounts: Record<PortalWorkflowStatus, number>;
+  sectorCounts: Record<PortalFacilitySector, number>;
   lastScan: string | null;
   source: "portal_cache";
   facilities: PortalWorkflowFacility[];
@@ -47,6 +52,18 @@ function clean(value: unknown) {
 
 function normalize(value: unknown) {
   return clean(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function normalizePortalFacilitySector(value: unknown): PortalFacilitySector {
+  const text = normalize(value);
+  if (!text) return "UNKNOWN";
+  if (/\b(public|government|govt)\b/.test(text) || /government owned|public sector/.test(text)) return "PUBLIC";
+  if (/\b(private|privately)\b/.test(text) || /private owned|privately owned|private sector/.test(text)) return "PRIVATE";
+  return "UNKNOWN";
+}
+
+function emptySectorCounts(): Record<PortalFacilitySector, number> {
+  return { PUBLIC: 0, PRIVATE: 0, UNKNOWN: 0 };
 }
 
 function latestDate(...values: Array<string | null | undefined>) {
@@ -109,6 +126,10 @@ export function normalizePortalWorkflowStatus(value: unknown): PortalWorkflowSta
     return "FINAL_APPROVAL_PENDING";
   }
 
+  if (/registration\s+approved|approved\s+registration|license\s+(issued|ready|approved)|licence\s+(issued|ready|approved)|provisional\s+licen[cs]e/.test(text) || text === "approved") {
+    return "REGISTRATION_APPROVED";
+  }
+
   return "UNKNOWN";
 }
 
@@ -127,6 +148,7 @@ export function portalWorkflowFacilityFromRow(row: PortalCacheRow): PortalWorkfl
     facilityCode: row.hef_no,
     category: row.category,
     lga: row.lga,
+    sector: normalizePortalFacilitySector(row.sector),
     currentWorkflowStatus,
     currentWorkflowStatusLabel: PORTAL_WORKFLOW_LABELS[currentWorkflowStatus],
     lastActivityDate: latestDate(row.updated_at, row.captured_at),
@@ -137,18 +159,21 @@ export function portalWorkflowFacilityFromRow(row: PortalCacheRow): PortalWorkfl
 
 export function buildPortalWorkflowSummary(rows: PortalCacheRow[] = readPortalCacheRows()): WorkflowSummary {
   const statusCounts = emptyPortalWorkflowCounts();
+  const sectorCounts = emptySectorCounts();
   const facilities: PortalWorkflowFacility[] = [];
 
   for (const row of rows) {
     const facility = portalWorkflowFacilityFromRow(row);
     if (!facility) continue;
     statusCounts[facility.currentWorkflowStatus] += 1;
+    sectorCounts[facility.sector] += 1;
     facilities.push(facility);
   }
 
   return {
     totalPortalRecords: rows.length,
     statusCounts,
+    sectorCounts,
     lastScan: latestDate(...rows.map((row) => row.captured_at ?? row.updated_at)),
     source: "portal_cache",
     facilities,
@@ -163,6 +188,7 @@ export function buildPortalWorkflowDiagnostics(rows: PortalCacheRow[] = readPort
     return acc;
   }, {} as Record<PortalWorkflowStatus, PortalWorkflowFacility[]>);
   const unknownFacilities: Array<{ facilityName: string | null; facilityCode: string | null; rawStatus: string }> = [];
+  const sectorCounts = emptySectorCounts();
 
   for (const row of rows) {
     const rawStatus = primaryPortalStatusText(row) || "UNKNOWN";
@@ -171,6 +197,7 @@ export function buildPortalWorkflowDiagnostics(rows: PortalCacheRow[] = readPort
     normalizedStatusMapping[rawStatus] = normalized;
 
     const facility = portalWorkflowFacilityFromRow(row);
+    sectorCounts[normalizePortalFacilitySector(row.sector)] += 1;
     if (facility) {
       if (sampleFacilities[facility.currentWorkflowStatus].length < 5) {
         sampleFacilities[facility.currentWorkflowStatus].push(facility);
@@ -184,6 +211,7 @@ export function buildPortalWorkflowDiagnostics(rows: PortalCacheRow[] = readPort
     rawPortalStatusesFound: Array.from(rawStatusCounts.entries()).map(([status, count]) => ({ status, count })).sort((a, b) => b.count - a.count).slice(0, 200),
     normalizedStatusMapping,
     totalFacilitiesCounted: rows.length,
+    sectorCounts,
     facilitiesWithUnknownStatus: rows.filter((row) => normalizePortalWorkflowStatus(rawPortalStatusText(row)) === "UNKNOWN").length,
     sampleFacilities,
     unknownFacilities,

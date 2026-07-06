@@ -3,19 +3,9 @@ import { NextResponse } from "next/server";
 import { logMemory } from "@/lib/memory";
 import { getNotificationDashboard } from "@/lib/notificationEngine";
 import { getFastPortalFacilitySummary } from "@/lib/playwrightPortal";
+import { buildPortalWorkflowSummary } from "@/lib/portalWorkflow";
 
 export const runtime = "nodejs";
-
-const statusMap = {
-  DOCUMENT_QUERIED: "document_queried",
-  UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING: "upload_payment_pending_document_approval",
-  PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING: "payment_approved_pending_document_approval",
-  FINAL_APPROVAL_PENDING: "final_approval_pending",
-} as const;
-
-function countStatus(summary: ReturnType<typeof getFastPortalFacilitySummary>, key: keyof typeof statusMap) {
-  return summary.statusCounts[statusMap[key]] ?? 0;
-}
 
 export async function GET() {
   console.log("[/api/portal/analytics] started");
@@ -24,6 +14,7 @@ export async function GET() {
     logMemory("/api/portal/analytics start");
     const summary = getFastPortalFacilitySummary();
     const notificationDashboard = getNotificationDashboard({ compact: true });
+    const workflowSummary = buildPortalWorkflowSummary();
     const intelligence = notificationDashboard.intelligence ?? {};
 
     const payload = {
@@ -33,11 +24,16 @@ export async function GET() {
       verifiedLive: Math.max(summary.detailRecords || 0, summary.scanProgress.scannedDetails || 0),
       staleCache: Number(intelligence.staleCacheCount ?? 0),
       statusCounts: {
-        DOCUMENT_QUERIED: countStatus(summary, "DOCUMENT_QUERIED"),
-        UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING: countStatus(summary, "UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING"),
-        PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING: countStatus(summary, "PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING"),
-        FINAL_APPROVAL_PENDING: countStatus(summary, "FINAL_APPROVAL_PENDING"),
+        DOCUMENT_QUERY: workflowSummary.statusCounts.DOCUMENT_QUERY,
+        DOCUMENT_QUERIED: workflowSummary.statusCounts.DOCUMENT_QUERY,
+        UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING: workflowSummary.statusCounts.UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING,
+        PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING: workflowSummary.statusCounts.PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING,
+        DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING: workflowSummary.statusCounts.DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING,
+        INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING: workflowSummary.statusCounts.INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING,
+        FINAL_APPROVAL_PENDING: workflowSummary.statusCounts.FINAL_APPROVAL_PENDING,
+        REGISTRATION_APPROVED: workflowSummary.statusCounts.REGISTRATION_APPROVED,
       },
+      sectorCounts: workflowSummary.sectorCounts,
       actionCounts: {
         facilityReminderRequired: Number(intelligence.reminderQueueCount ?? notificationDashboard.reminderCandidates ?? 0),
         hefamaaAttentionRequired: Number(intelligence.hefamaaAttentionCount ?? 0),

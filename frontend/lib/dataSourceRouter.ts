@@ -38,7 +38,7 @@ export function routeDataSources(intent: DetectedIntent, question: string): Know
   const lower = question.toLowerCase();
   const requested = new Set(intent.dataSources ?? []);
 
-  if (/portal|scan|scanned|accreditation|inspection|requirements?|status|workflow|staff|doctor|nurse|operating officer|medical officer|professional in-charge|professional in charge|admission beds?|observation beds?|couches?/.test(lower)) {
+  if (/portal|scan|scanned|accreditation|inspection|requirements?|status|workflow|public sector|private sector|government owned|privately owned|registration approved|approved facilities|staff|doctor|nurse|operating officer|medical officer|professional in-charge|professional in charge|admission beds?|observation beds?|couches?/.test(lower)) {
     requested.add("portal_cache");
   }
   if (/sheet|spreadsheet|google|database|hefa no|hef\/no|hef no|hefamaa no|hefa number|facility code|facility id|missing fields?|duplicate|serial|s\/n/.test(lower)) {

@@ -17,10 +17,19 @@ type QaIndexRecord = {
   couches?: number | null;
   capturedAt?: string;
   category?: string;
+  documents?: Array<{ available?: boolean | null; name?: string; status?: string; text?: string }>;
+  facilityDetails?: Record<string, unknown>;
   facilityName?: string;
+  facilityResources?: Record<string, unknown>;
+  identification?: Record<string, unknown>;
   hefamaaId?: string;
   normalizedStatus?: string;
+  nonProfessionalStaff?: Record<string, unknown>;
   observationBeds?: number | null;
+  operatingOfficer?: Record<string, unknown>;
+  operations?: Record<string, unknown>;
+  professionalStaff?: Array<Record<string, unknown>>;
+  proprietorDetails?: Record<string, unknown>;
   qaFields?: Record<string, string>;
   qaSearchText?: string;
   recordDate?: string | null;
@@ -30,6 +39,7 @@ type QaIndexRecord = {
   staffComplement?: Record<string, number>;
   url?: string;
   visibleFields?: Record<string, string>;
+  workflow?: Record<string, unknown>;
 };
 
 type QaIndexFile = { records?: QaIndexRecord[]; sourceMtimeMs?: number; version?: number };
@@ -43,6 +53,7 @@ export type PortalCacheRow = {
   facility_name: string | null;
   hef_no: string | null;
   category: string | null;
+  sector: string | null;
   lga: string | null;
   lcda: string | null;
   address: string | null;
@@ -177,6 +188,35 @@ function globalValue(text: string, labels: string[], fields?: Record<string, str
   return valueAfterLabel(linesOf(text), labels);
 }
 
+
+function valueFromObjectPath(value: unknown, path: string[]) {
+  let current: unknown = value;
+  for (const key of path) {
+    if (!current || typeof current !== "object" || Array.isArray(current)) return "";
+    current = (current as Record<string, unknown>)[key];
+  }
+  return clean(current);
+}
+
+function normalizeFacilitySector(value: unknown): "PUBLIC" | "PRIVATE" | "UNKNOWN" {
+  const text = normalize(value);
+  if (!text) return "UNKNOWN";
+  if (/\b(public|government|govt)\b/.test(text) || /government owned|public sector/.test(text)) return "PUBLIC";
+  if (/\b(private|privately)\b/.test(text) || /private owned|privately owned|private sector/.test(text)) return "PRIVATE";
+  return "UNKNOWN";
+}
+
+function sectorFromRecord(input: { fields?: Record<string, string>; structured?: Record<string, unknown>; text?: string }) {
+  const structured = input.structured ?? {};
+  const explicit = valueFromObjectPath(structured, ["identification", "facilitySector"])
+    || valueFromObjectPath(structured, ["Identification", "facilitySector"]);
+  const fromFields = globalValue(input.text ?? "", ["FACILITY SECTOR", "SECTOR", "OWNERSHIP", "OWNERSHIP TYPE"], input.fields);
+  const fromText = valueAfterLabel(linesOf(input.text ?? ""), ["FACILITY SECTOR", "SECTOR", "OWNERSHIP", "OWNERSHIP TYPE"]);
+  const raw = explicit || fromFields || fromText;
+  const normalized = normalizeFacilitySector(raw);
+  return normalized === "UNKNOWN" ? null : normalized;
+}
+
 function parseBedNumber(value: unknown) {
   const text = clean(value);
   if (!text || /^(n\/?a|not applicable|null|nil|none|-|—)$/i.test(text)) return null;
@@ -268,13 +308,23 @@ function detailToRow(record: LightweightPortalFacilityDetailRecord, index: numbe
   const structuredData = {
     applicationType: record.applicationType ?? null,
     bedDistribution,
+    documents: record.documents ?? null,
+    facilityDetails: record.facilityDetails ?? null,
+    facilityResources: record.facilityResources ?? null,
     fieldIndex: record.fieldIndex ?? null,
+    identification: record.identification ?? null,
     renewalYear: record.renewalYear ?? record.sourceRecord?.renewalYear ?? null,
     formFields: record.formFields ?? null,
+    nonProfessionalStaff: record.nonProfessionalStaff ?? null,
+    operatingOfficer: record.operatingOfficer ?? null,
+    operations: record.operations ?? null,
+    professionalStaff: record.professionalStaff ?? null,
+    proprietorDetails: record.proprietorDetails ?? null,
     staffComplement: record.staffComplement ?? null,
     staffDetails: record.staffDetails ?? null,
     tables: record.tables ?? null,
     visibleFields: fields,
+    workflow: record.workflow ?? null,
   };
 
   return {
@@ -282,6 +332,7 @@ function detailToRow(record: LightweightPortalFacilityDetailRecord, index: numbe
     facility_name: clean(record.facilityName) || null,
     hef_no: clean(record.hefamaaId) || globalValue(text, ["HEF/NO", "HEF NO", "FACILITY CODE"], fields) || null,
     category: clean(record.category) || null,
+    sector: sectorFromRecord({ fields, structured: structuredData, text }),
     lga: sectionValue(text, "CONTACT DETAILS", ["LGA", "LOCAL GOVERNMENT"]) || globalValue(text, ["LGA", "LOCAL GOVERNMENT"], fields) || null,
     lcda: sectionValue(text, "CONTACT DETAILS", ["LCDA"]) || globalValue(text, ["LCDA"], fields) || null,
     address: sectionValue(text, "CONTACT DETAILS", ["ADDRESS", "FACILITY ADDRESS"]) || globalValue(text, ["ADDRESS", "FACILITY ADDRESS"], fields) || null,
@@ -312,11 +363,29 @@ function qaToRow(record: QaIndexRecord, index: number): PortalCacheRow {
   const text = clean(record.qaSearchText);
   const status = clean(record.registrationStatus || record.normalizedStatus || fields.status);
   const bedDistribution = bedDistributionForRecord(record, text, mergedFields);
+  const structuredData = {
+    bedDistribution,
+    documents: record.documents ?? null,
+    facilityDetails: record.facilityDetails ?? null,
+    facilityResources: record.facilityResources ?? null,
+    identification: record.identification ?? null,
+    nonProfessionalStaff: record.nonProfessionalStaff ?? null,
+    operatingOfficer: record.operatingOfficer ?? null,
+    operations: record.operations ?? null,
+    professionalStaff: record.professionalStaff ?? null,
+    proprietorDetails: record.proprietorDetails ?? null,
+    qaFields: fields,
+    renewalYear: record.renewalYear ?? record.sourceRecord?.renewalYear ?? null,
+    staffComplement: record.staffComplement ?? null,
+    visibleFields: record.visibleFields ?? null,
+    workflow: record.workflow ?? null,
+  };
   return {
     id: rowId(record as LightweightPortalFacilityRecord, index),
     facility_name: clean(record.facilityName) || null,
     hef_no: clean(record.hefamaaId) || null,
     category: clean(record.category || fields.category) || null,
+    sector: sectorFromRecord({ fields: mergedFields, structured: structuredData, text }),
     lga: clean(fields.lga) || clean(record.visibleFields?.LGA) || null,
     lcda: clean(fields.lcda) || clean(record.visibleFields?.LCDA) || null,
     address: clean(fields.address) || null,
@@ -334,7 +403,7 @@ function qaToRow(record: QaIndexRecord, index: number): PortalCacheRow {
     doctors_count: Number(record.staffComplement?.Doctors || 0) || null,
     nurses_count: Number(record.staffComplement?.Nurses || 0) || null,
     raw_portal_text: clean(record.qaSearchText) || null,
-    structured_portal_data: { bedDistribution, qaFields: fields, renewalYear: record.renewalYear ?? record.sourceRecord?.renewalYear ?? null, staffComplement: record.staffComplement ?? null, visibleFields: record.visibleFields ?? null },
+    structured_portal_data: structuredData,
     source_url: clean(record.url) || null,
     captured_at: clean(record.capturedAt) || null,
     updated_at: clean(record.capturedAt) || clean(record.sourceRecord?.lastSeen) || null,
@@ -349,6 +418,7 @@ function listToRow(record: LightweightPortalFacilityRecord, index: number): Port
     facility_name: clean(record.facilityName) || null,
     hef_no: clean(record.hefamaaId) || null,
     category: clean(record.category) || null,
+    sector: sectorFromRecord({ fields: record.visibleFields, structured: { visibleFields: record.visibleFields ?? null }, text }),
     lga: null,
     lcda: null,
     address: null,
@@ -418,6 +488,7 @@ export function portalRowMatchesText(row: PortalCacheRow, query: string) {
     row.facility_name,
     row.hef_no,
     row.category,
+    row.sector,
     row.lga,
     row.lcda,
     row.address,

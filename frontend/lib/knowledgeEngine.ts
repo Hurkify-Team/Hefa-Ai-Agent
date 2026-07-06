@@ -244,12 +244,56 @@ function workflowStatusFromQuestion(question: string): PortalWorkflowStatus | nu
   if (/document\s+approved.*inspection|inspection\s+report\s+pending/i.test(question)) return "DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING";
   if (/inspection\s+approval|inspection\s+report\s+upload/i.test(question)) return "INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING";
   if (/final\s+approval/i.test(question)) return "FINAL_APPROVAL_PENDING";
+  if (/registration\s+approved|approved\s+facilit|license\s+(ready|issued|approved)|licence\s+(ready|issued|approved)/i.test(question)) return "REGISTRATION_APPROVED";
   return null;
+}
+
+function sectorFromQuestion(question: string): "PUBLIC" | "PRIVATE" | null {
+  if (/\b(public|government|govt)\b|public\s+sector|government owned/i.test(question)) return "PUBLIC";
+  if (/\b(private|privately)\b|private\s+sector|privately owned/i.test(question)) return "PRIVATE";
+  return null;
+}
+
+function lgaFromQuestion(question: string) {
+  const match = question.match(/\bin\s+([a-z][a-z\s-]+?)(?:\s+lga|\s+local government|\?|$)/i);
+  return match?.[1]?.trim() ?? "";
 }
 
 function portalWorkflowAnswer(question: string, requiresList?: boolean) {
   const workflow = buildPortalWorkflowSummary();
+  const sector = sectorFromQuestion(question);
   const status = workflowStatusFromQuestion(question);
+  if (sector) {
+    const requestedLga = lgaFromQuestion(question);
+    const facilities = workflow.facilities.filter((facility) => facility.sector === sector && (!requestedLga || String(facility.lga ?? "").toLowerCase().includes(requestedLga.toLowerCase())));
+    if (/compare/i.test(question)) {
+      return {
+        answer: "The portal cache shows " + workflow.sectorCounts.PUBLIC.toLocaleString() + " public sector facilities and " + workflow.sectorCounts.PRIVATE.toLocaleString() + " private sector facilities.",
+        rows: [
+          { Sector: "Public", Count: workflow.sectorCounts.PUBLIC },
+          { Sector: "Private", Count: workflow.sectorCounts.PRIVATE },
+          { Sector: "Unknown", Count: workflow.sectorCounts.UNKNOWN },
+        ],
+        summary: { sectorCounts: workflow.sectorCounts, source: workflow.source, lastScan: workflow.lastScan },
+      };
+    }
+    const rows = requiresList || /show|list|which|display|facilities/i.test(question)
+      ? facilities.slice(0, 50).map((facility) => ({
+          "Facility Name": facility.facilityName,
+          "HEFA NO / Facility Code": facility.facilityCode,
+          Category: facility.category,
+          LGA: facility.lga,
+          Sector: facility.sector,
+          Status: facility.currentWorkflowStatusLabel,
+          "Last Scan Date": facility.lastScanDate,
+        }))
+      : [];
+    return {
+      answer: facilities.length.toLocaleString() + " " + (sector === "PUBLIC" ? "public" : "private") + " sector facilit" + (facilities.length === 1 ? "y is" : "ies are") + (requestedLga ? " recorded in " + requestedLga : " recorded") + " in the portal scan cache.",
+      rows,
+      summary: { sector, count: facilities.length, sectorCounts: workflow.sectorCounts, source: workflow.source, lastScan: workflow.lastScan },
+    };
+  }
   if (status) {
     const facilities = workflow.facilities.filter((facility) => facility.currentWorkflowStatus === status);
     const rows = requiresList || /show|list|which|display|awaiting/i.test(question)
@@ -270,7 +314,7 @@ function portalWorkflowAnswer(question: string, requiresList?: boolean) {
     };
   }
   return {
-    answer: "I grouped the HEFAMAA portal cache by the six official workflow statuses.",
+    answer: "I grouped the HEFAMAA portal cache by the seven official workflow statuses.",
     rows: Object.entries(workflow.statusCounts).map(([statusKey, count]) => ({ Status: PORTAL_WORKFLOW_LABELS[statusKey as PortalWorkflowStatus], Count: count })),
     summary: { totalPortalRecords: workflow.totalPortalRecords, source: workflow.source, lastScan: workflow.lastScan },
   };
@@ -634,6 +678,30 @@ export async function answerQuestion(input: KnowledgeAnswerInput): Promise<Knowl
   let answer = "I could not understand the question well enough to calculate an answer yet.";
   let rows: Array<Record<string, unknown>> = [];
   const summary: Record<string, unknown> = { intent: intent.intent, sources };
+
+  if (sources.includes("portal_cache") && (sectorFromQuestion(input.question) || workflowStatusFromQuestion(input.question))) {
+    const result = portalWorkflowAnswer(input.question, intent.requiresList);
+    answer = result.answer;
+    rows = result.rows;
+    Object.assign(summary, result.summary);
+    const resultRows = rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, compactValue(value)])));
+    updateConversationMemory(input.sessionId, {
+      lastCategory: intent.entities.category,
+      lastFacilityName: intent.entities.facilityName,
+      lastIntent: intent.intent,
+      lastLGA: intent.entities.lga,
+      lastResultSet: resultRows,
+    });
+    return {
+      actions: buildActions(input.question, intent),
+      answer,
+      confidence: intent.confidence,
+      intent,
+      rows: resultRows,
+      sources: sourceStatus,
+      summary,
+    };
+  }
 
   switch (intent.intent) {
     case "notification_document_queried":

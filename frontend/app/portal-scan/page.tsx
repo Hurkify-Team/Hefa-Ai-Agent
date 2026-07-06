@@ -195,7 +195,8 @@ type PortalWorkflowStatus =
   | "PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING"
   | "DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING"
   | "INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING"
-  | "FINAL_APPROVAL_PENDING";
+  | "FINAL_APPROVAL_PENDING"
+  | "REGISTRATION_APPROVED";
 
 type PortalWorkflowFacility = {
   id: string;
@@ -203,6 +204,7 @@ type PortalWorkflowFacility = {
   facilityCode: string | null;
   category: string | null;
   lga: string | null;
+  sector: "PUBLIC" | "PRIVATE" | "UNKNOWN";
   currentWorkflowStatus: PortalWorkflowStatus;
   currentWorkflowStatusLabel: string;
   lastActivityDate: string | null;
@@ -213,6 +215,7 @@ type PortalWorkflowFacility = {
 type PortalWorkflowSummary = {
   totalPortalRecords: number;
   statusCounts: Record<PortalWorkflowStatus, number>;
+  sectorCounts: Record<"PUBLIC" | "PRIVATE" | "UNKNOWN", number>;
   lastScan: string | null;
   source: "portal_cache";
   facilities: PortalWorkflowFacility[];
@@ -242,6 +245,7 @@ const workflowStatusLabels: Record<string, string> = {
   DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING: "Document Approved/Inspection Report Pending",
   INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING: "Inspection Report Upload/Inspection Approval Pending",
   FINAL_APPROVAL_PENDING: "Final Approval Pending",
+  REGISTRATION_APPROVED: "Registration Approved",
 };
 
 function statusLabel(status: string) {
@@ -487,6 +491,7 @@ export default function PortalScanPage() {
   const [cachedRecords, setCachedRecords] = useState<PortalRecordsResult | null>(null);
   const [workflowSummary, setWorkflowSummary] = useState<PortalWorkflowSummary | null>(null);
   const [selectedWorkflowStatus, setSelectedWorkflowStatus] = useState<PortalWorkflowStatus | null>(null);
+  const [selectedSector, setSelectedSector] = useState<"PUBLIC" | "PRIVATE" | null>(null);
   const [showFreshScanConfirm, setShowFreshScanConfirm] = useState(false);
   const [onlyMissingBeds, setOnlyMissingBeds] = useState(true);
   const [isSearchingCache, setIsSearchingCache] = useState(false);
@@ -517,6 +522,9 @@ export default function PortalScanPage() {
   const fullScanReady = Boolean(portalSessionReady && !isScanning && !isLoading && !isScanRunning);
   const selectedWorkflowFacilities = selectedWorkflowStatus
     ? (workflowSummary?.facilities ?? []).filter((facility) => facility.currentWorkflowStatus === selectedWorkflowStatus)
+    : [];
+  const selectedSectorFacilities = selectedSector
+    ? (workflowSummary?.facilities ?? []).filter((facility) => facility.sector === selectedSector)
     : [];
 
   useEffect(() => {
@@ -1357,7 +1365,10 @@ export default function PortalScanPage() {
                       <button
                         className={["rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-md", selectedWorkflowStatus === statusKey ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white"].join(" ")}
                         key={statusKey}
-                        onClick={() => setSelectedWorkflowStatus(selectedWorkflowStatus === statusKey ? null : statusKey as PortalWorkflowStatus)}
+                        onClick={() => {
+                          setSelectedSector(null);
+                          setSelectedWorkflowStatus(selectedWorkflowStatus === statusKey ? null : statusKey as PortalWorkflowStatus);
+                        }}
                         type="button"
                       >
                         <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
@@ -1367,6 +1378,66 @@ export default function PortalScanPage() {
                       </button>
                     ))}
                   </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {(["PUBLIC", "PRIVATE"] as const).map((sector) => (
+                      <button
+                        className={["rounded-2xl border p-4 text-left transition hover:-translate-y-0.5 hover:border-emerald-300 hover:shadow-md", selectedSector === sector ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-white"].join(" ")}
+                        key={sector}
+                        onClick={() => {
+                          setSelectedWorkflowStatus(null);
+                          setSelectedSector(selectedSector === sector ? null : sector);
+                        }}
+                        type="button"
+                      >
+                        <p className="text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                          {sector === "PUBLIC" ? "Public Sector Facilities" : "Private Sector Facilities"}
+                        </p>
+                        <p className="mt-2 text-[20px] font-semibold text-slate-950">{formatCount(workflowSummary.sectorCounts[sector] ?? 0)}</p>
+                      </button>
+                    ))}
+                  </div>
+                  {selectedSector ? (
+                    <div className="overflow-hidden rounded-2xl border border-emerald-100 bg-white shadow-sm">
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-emerald-50 px-4 py-3">
+                        <div>
+                          <p className="text-[13px] font-extrabold text-slate-950">{selectedSector === "PUBLIC" ? "Public Sector Facilities" : "Private Sector Facilities"}</p>
+                          <p className="text-[12px] font-semibold text-slate-500">{formatCount(selectedSectorFacilities.length)} portal-cache facilities</p>
+                        </div>
+                        <button className="rounded-lg border border-emerald-200 bg-white px-3 py-2 text-[12px] font-bold text-emerald-700" onClick={() => setSelectedSector(null)} type="button">Close</button>
+                      </div>
+                      <div className="max-h-96 overflow-auto">
+                        <table className="min-w-full divide-y divide-slate-200 text-left text-[12px]">
+                          <thead className="sticky top-0 bg-slate-50 text-[10px] uppercase tracking-[0.08em] text-slate-500">
+                            <tr>
+                              <th className="px-3 py-2">Facility Name</th>
+                              <th className="px-3 py-2">HEFA NO / Facility Code</th>
+                              <th className="px-3 py-2">Category</th>
+                              <th className="px-3 py-2">LGA</th>
+                              <th className="px-3 py-2">Sector</th>
+                              <th className="px-3 py-2">Status</th>
+                              <th className="px-3 py-2">Last Scan Date</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {selectedSectorFacilities.slice(0, 300).map((facility) => (
+                              <tr className="align-top" key={facility.id}>
+                                <td className="px-3 py-2 font-bold text-slate-950">{facility.facilityName || "Unnamed facility"}</td>
+                                <td className="px-3 py-2 text-blue-700">{facility.facilityCode || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.category || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.lga || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.sector}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.currentWorkflowStatusLabel}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.lastScanDate || "-"}</td>
+                              </tr>
+                            ))}
+                            {!selectedSectorFacilities.length ? (
+                              <tr><td className="px-3 py-5 text-slate-500" colSpan={7}>No facilities are currently counted under this sector.</td></tr>
+                            ) : null}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
                   {selectedWorkflowStatus ? (
                     <div className="overflow-hidden rounded-2xl border border-blue-100 bg-white shadow-sm">
                       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-blue-50 px-4 py-3">
@@ -1384,6 +1455,7 @@ export default function PortalScanPage() {
                               <th className="px-3 py-2">HEFA NO / Facility Code</th>
                               <th className="px-3 py-2">Category</th>
                               <th className="px-3 py-2">LGA</th>
+                              <th className="px-3 py-2">Sector</th>
                               <th className="px-3 py-2">Current Workflow Status</th>
                               <th className="px-3 py-2">Last Activity Date</th>
                               <th className="px-3 py-2">Last Scan Date</th>
@@ -1396,13 +1468,14 @@ export default function PortalScanPage() {
                                 <td className="px-3 py-2 text-blue-700">{facility.facilityCode || "-"}</td>
                                 <td className="px-3 py-2 text-slate-700">{facility.category || "-"}</td>
                                 <td className="px-3 py-2 text-slate-700">{facility.lga || "-"}</td>
+                                <td className="px-3 py-2 text-slate-700">{facility.sector}</td>
                                 <td className="px-3 py-2 text-slate-700">{facility.currentWorkflowStatusLabel}</td>
                                 <td className="px-3 py-2 text-slate-700">{facility.lastActivityDate || "-"}</td>
                                 <td className="px-3 py-2 text-slate-700">{facility.lastScanDate || "-"}</td>
                               </tr>
                             ))}
                             {!selectedWorkflowFacilities.length ? (
-                              <tr><td className="px-3 py-5 text-slate-500" colSpan={7}>No facilities are currently counted under this workflow status.</td></tr>
+                              <tr><td className="px-3 py-5 text-slate-500" colSpan={8}>No facilities are currently counted under this workflow status.</td></tr>
                             ) : null}
                           </tbody>
                         </table>

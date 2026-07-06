@@ -196,17 +196,59 @@ function workflowStatusFromQuestion(question: string): PortalWorkflowStatus | nu
   if (/document\s+approved.*inspection|inspection\s+report\s+pending/i.test(question)) return "DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING";
   if (/inspection\s+approval|inspection\s+report\s+upload/i.test(question)) return "INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING";
   if (/final\s+approval/i.test(question)) return "FINAL_APPROVAL_PENDING";
+  if (/registration\s+approved|approved\s+facilit|license\s+(ready|issued|approved)|licence\s+(ready|issued|approved)/i.test(question)) return "REGISTRATION_APPROVED";
   return null;
 }
 
 function isPortalWorkflowQuestion(question: string) {
-  return /workflow|document\s+quer|documents\s+queried|final\s+approval|inspection\s+approval|inspection\s+report|upload\s+payment|payment\s+approved|awaiting\s+final|approval\s+pending/i.test(question);
+  return /workflow|public\s+sector|private\s+sector|government\s+facilit|privately\s+owned|public\s+facilit|private\s+facilit|compare\s+public|compare\s+private|document\s+quer|documents\s+queried|registration\s+approved|approved\s+facilit|final\s+approval|inspection\s+approval|inspection\s+report|upload\s+payment|payment\s+approved|awaiting\s+final|approval\s+pending/i.test(question);
+}
+
+function sectorFromQuestion(question: string): "PUBLIC" | "PRIVATE" | null {
+  if (/\b(public|government|govt)\b|public\s+sector|government owned/i.test(question)) return "PUBLIC";
+  if (/\b(private|privately)\b|private\s+sector|privately owned/i.test(question)) return "PRIVATE";
+  return null;
+}
+
+function lgaFromQuestion(question: string) {
+  const match = question.match(/\bin\s+([a-z][a-z\s-]+?)(?:\s+lga|\s+local government|\?|$)/i);
+  return match?.[1]?.trim() ?? "";
 }
 
 function answerPortalWorkflowQuestion(question: string) {
   const summary = buildPortalWorkflowSummary();
+  const sector = sectorFromQuestion(question);
   const status = workflowStatusFromQuestion(question);
   const wantsList = /show|list|which|display|facilities/i.test(question);
+  if (sector) {
+    const requestedLga = lgaFromQuestion(question);
+    const facilities = summary.facilities.filter((facility) => facility.sector === sector && (!requestedLga || String(facility.lga ?? "").toLowerCase().includes(requestedLga.toLowerCase())));
+    const otherSector = sector === "PUBLIC" ? "PRIVATE" : "PUBLIC";
+    if (/compare/i.test(question)) {
+      return {
+        answer: "The portal cache shows " + summary.sectorCounts.PUBLIC.toLocaleString() + " public sector facilities and " + summary.sectorCounts.PRIVATE.toLocaleString() + " private sector facilities.",
+        rows: [
+          { Sector: "Public", Count: summary.sectorCounts.PUBLIC },
+          { Sector: "Private", Count: summary.sectorCounts.PRIVATE },
+          { Sector: "Unknown", Count: summary.sectorCounts.UNKNOWN },
+        ],
+        summary: { sectorCounts: summary.sectorCounts, source: summary.source, lastScan: summary.lastScan },
+      };
+    }
+    return {
+      answer: facilities.length.toLocaleString() + " " + (sector === "PUBLIC" ? "public" : "private") + " sector facilit" + (facilities.length === 1 ? "y is" : "ies are") + (requestedLga ? " recorded in " + requestedLga + "" : " recorded") + " in the portal scan cache. " + otherSector + " sector total is " + summary.sectorCounts[otherSector].toLocaleString() + ".",
+      rows: wantsList ? facilities.slice(0, 50).map((facility) => ({
+        "Facility Name": facility.facilityName,
+        "HEFA NO / Facility Code": facility.facilityCode,
+        Category: facility.category,
+        LGA: facility.lga,
+        Sector: facility.sector,
+        Status: facility.currentWorkflowStatusLabel,
+        "Last Scan Date": facility.lastScanDate,
+      })) : [{ Sector: sector, Count: facilities.length }],
+      summary: { sector, count: facilities.length, sectorCounts: summary.sectorCounts, source: summary.source, lastScan: summary.lastScan },
+    };
+  }
   if (status) {
     const facilities = summary.facilities.filter((facility) => facility.currentWorkflowStatus === status);
     return {
@@ -224,7 +266,7 @@ function answerPortalWorkflowQuestion(question: string) {
     };
   }
   return {
-    answer: "I grouped the HEFAMAA portal cache by the six official workflow statuses.",
+    answer: "I grouped the HEFAMAA portal cache by the seven official workflow statuses.",
     rows: Object.entries(summary.statusCounts).map(([Status, Count]) => ({ Status: PORTAL_WORKFLOW_LABELS[Status as PortalWorkflowStatus], Count })),
     summary: { totalPortalRecords: summary.totalPortalRecords, lastScan: summary.lastScan, source: summary.source },
   };

@@ -32,10 +32,19 @@ type PortalAnalytics = {
   verifiedLive: number;
   staleCache: number;
   statusCounts: {
+    DOCUMENT_QUERY?: number;
     DOCUMENT_QUERIED: number;
     UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING: number;
     PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING: number;
+    DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING: number;
+    INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING: number;
     FINAL_APPROVAL_PENDING: number;
+    REGISTRATION_APPROVED: number;
+  };
+  sectorCounts?: {
+    PUBLIC: number;
+    PRIVATE: number;
+    UNKNOWN: number;
   };
   actionCounts: {
     facilityReminderRequired: number;
@@ -232,10 +241,15 @@ export default function DashboardPage() {
       { label: "Total Portal Records Scanned", value: portalAnalytics ? formatNumber(portalAnalytics.totalScanned) : "-", tone: "bg-blue-50 text-blue-700" },
       { label: "Records Verified Live", value: portalAnalytics ? formatNumber(portalAnalytics.verifiedLive) : "-", tone: "bg-emerald-50 text-emerald-700" },
       { label: "Stale Cache Records", value: portalAnalytics ? formatNumber(portalAnalytics.staleCache) : "-", tone: "bg-amber-50 text-amber-700" },
-      { label: "Document Query", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.DOCUMENT_QUERIED) : "-", tone: "bg-rose-50 text-rose-700" },
+      { label: "Public Sector Facilities", value: portalAnalytics ? formatNumber(portalAnalytics.sectorCounts?.PUBLIC ?? 0) : "-", tone: "bg-sky-50 text-sky-700" },
+      { label: "Private Sector Facilities", value: portalAnalytics ? formatNumber(portalAnalytics.sectorCounts?.PRIVATE ?? 0) : "-", tone: "bg-emerald-50 text-emerald-700" },
+      { label: "Document Query", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.DOCUMENT_QUERY ?? portalAnalytics.statusCounts.DOCUMENT_QUERIED) : "-", tone: "bg-rose-50 text-rose-700" },
       { label: "Upload Payment Pending", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.UPLOAD_PAYMENT_DOCUMENT_APPROVAL_PENDING) : "-", tone: "bg-orange-50 text-orange-700" },
       { label: "Payment Approved Pending", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.PAYMENT_APPROVED_DOCUMENT_APPROVAL_PENDING) : "-", tone: "bg-indigo-50 text-indigo-700" },
+      { label: "Document Approved Inspection", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.DOCUMENT_APPROVED_INSPECTION_REPORT_PENDING) : "-", tone: "bg-blue-50 text-blue-700" },
+      { label: "Inspection Approval Pending", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.INSPECTION_REPORT_UPLOAD_INSPECTION_APPROVAL_PENDING) : "-", tone: "bg-amber-50 text-amber-700" },
       { label: "Final Approval Pending", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.FINAL_APPROVAL_PENDING) : "-", tone: "bg-violet-50 text-violet-700" },
+      { label: "Registration Approved", value: portalAnalytics ? formatNumber(portalAnalytics.statusCounts.REGISTRATION_APPROVED) : "-", tone: "bg-green-50 text-green-700" },
       { label: "HEFAMAA Action", value: portalAnalytics ? formatNumber(portalAnalytics.actionCounts.hefamaaAttentionRequired) : "-", tone: "bg-slate-100 text-slate-800" },
       { label: "Facility Reminder", value: portalAnalytics ? formatNumber(portalAnalytics.actionCounts.facilityReminderRequired) : "-", tone: "bg-cyan-50 text-cyan-700" },
     ],

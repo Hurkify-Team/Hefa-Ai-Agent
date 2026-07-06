@@ -1466,6 +1466,7 @@ async function verifyRecipientBeforeSend(recipient: NotificationRecipient) {
       address: null,
       captured_at: new Date().toISOString(),
       category: recipient.category || capture.selectedPortalRecord?.category || null,
+      sector: null,
       contact: recipient.contact_phone || null,
       admissionBeds: null,
       observationBeds: null,
