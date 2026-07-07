@@ -5617,31 +5617,32 @@ async function openFacilityResult(page: Page, rowIndex: number) {
   }, rowIndex);
 }
 
-async function waitForFacilityRecordReady(page: Page, facilityName = "", timeoutMs = 2_500) {
+async function waitForFacilityRecordReady(page: Page, facilityName = "", timeoutMs = 5_000) {
   const targetName = cleanPortalText(facilityName).toLowerCase();
 
-  await Promise.race([
-    page.waitForLoadState("domcontentloaded", { timeout: timeoutMs }).catch(() => undefined),
-    page.waitForFunction(
-      ({ targetName }) => {
-        const body = document.body?.innerText ?? "";
-        const lowerBody = body.toLowerCase();
-        const targetVisible = !targetName || lowerBody.includes(targetName);
-        const hasDetailKeyword = /admin activ|registration approval|professional staff|facility information|owner|director|license|licence|approval/i.test(body);
-        const visibleDialog = Array.from(document.querySelectorAll<HTMLElement>(".modal,.modal-dialog,[role='dialog']")).some((element) => {
-          const style = window.getComputedStyle(element);
-          const rect = element.getBoundingClientRect();
-          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-        });
+  await page.waitForLoadState("domcontentloaded", { timeout: Math.min(timeoutMs, 3_000) }).catch(() => undefined);
 
-        return targetVisible && (hasDetailKeyword || visibleDialog);
-      },
-      { targetName },
-      { timeout: timeoutMs },
-    ).catch(() => undefined),
-  ]).catch(() => undefined);
+  const ready = await page.waitForFunction(
+    ({ targetName }) => {
+      const body = document.body?.innerText ?? "";
+      const lowerBody = body.toLowerCase();
+      const targetVisible = !targetName || lowerBody.includes(targetName);
+      const hasDetailKeyword = /admin activ|registration approval|professional staff|facility information|facility details|proprietor|owner|director|operating officer|medical professional|bed distribution|scope of service|license|licence|approval/i.test(body);
+      const visibleDialog = Array.from(document.querySelectorAll<HTMLElement>(".modal,.modal-dialog,[role='dialog']")).some((element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      });
+      const listOnly = Boolean(document.querySelector("#mainGrid")) && /showing\s+\d+\s+to\s+\d+|entries|search/i.test(body) && !hasDetailKeyword && !visibleDialog;
+
+      return targetVisible && !listOnly && (hasDetailKeyword || visibleDialog);
+    },
+    { targetName },
+    { timeout: timeoutMs },
+  ).then(() => true).catch(() => false);
 
   await page.waitForFunction(() => Boolean((document.body?.innerText || "").trim()), null, { timeout: 300 }).catch(() => undefined);
+  return ready;
 }
 
 function getApprovalEvidence(pageText: string, selectedRenewalYear: number | null) {
@@ -6033,7 +6034,10 @@ export async function openSearchResultRecord({ rowIndex }: OpenSearchResultInput
     throw new Error("The selected portal record could not be opened. Search again, then choose the facility row from the Portal Matches list.");
   }
 
-  await waitForFacilityRecordReady(page, selectedRecord.facilityName || query, 2_500);
+  const recordReady = await waitForFacilityRecordReady(page, selectedRecord.facilityName || query, 6_000);
+  if (!recordReady) {
+    throw new Error("The selected portal record opened, but the facility detail page did not become ready for capture. Please select the row again after the portal finishes loading.");
+  }
 
   const openedText = await getVisibleText(page);
   const renewalSelection = buildRenewalSelectionFromRecord({
@@ -6093,6 +6097,11 @@ export async function captureSelectedPortalFacilityDetail() {
     lastSeen: new Date().toISOString(),
     normalizedStatus,
   };
+  const recordReady = await waitForFacilityRecordReady(session.page, selectedRecord.facilityName, 6_000);
+  if (!recordReady) {
+    throw new Error("The portal facility detail page is not ready. Open the selected facility record first, then capture again.");
+  }
+
   const detail = await captureFacilityDetailRecord(session.page, sourceRecord);
   await persistPortalStorageState(session);
 
