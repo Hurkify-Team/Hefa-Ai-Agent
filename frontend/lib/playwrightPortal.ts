@@ -5558,19 +5558,16 @@ function selectRenewalRecord(rows: FacilitySearchResultRow[], query = "") {
     if (!row.renewalYear) return latest;
     return latest === null || row.renewalYear > latest ? row.renewalYear : latest;
   }, null);
-  const currentYearRows = rows.filter((row) => row.renewalYear === currentRenewalYear);
   const latestYearRows = latestAvailableRenewalYear
     ? rows.filter((row) => row.renewalYear === latestAvailableRenewalYear)
     : [];
-  const selectedRows = currentYearRows.length ? currentYearRows : latestYearRows.length ? latestYearRows : rows;
-  const targetYear = currentYearRows.length ? currentRenewalYear : latestAvailableRenewalYear;
+  const selectedRows = latestYearRows.length ? latestYearRows : rows;
+  const targetYear = latestAvailableRenewalYear;
   const rankedRows = selectedRows
     .map((row) => ({ row, score: rowSelectionScore(row, query, targetYear) }))
     .sort((a, b) => b.score - a.score);
   const top = rankedRows[0] ?? null;
-  const next = rankedRows[1] ?? null;
-  const selectedRecord =
-    rankedRows.length === 1 || (top && (!next || top.score - next.score >= 15)) ? top?.row ?? null : null;
+  const selectedRecord = top?.row ?? null;
 
   if (!selectedRecord) {
     return {
@@ -5968,8 +5965,15 @@ export async function searchFacility({ facilityName, openSelectedRecord = true }
     ? await openFacilityResult(page, selection.selectedRecord.index).catch(() => false)
     : false;
 
-  if (clickedSelectedRecord) {
-    await waitForFacilityRecordReady(page, selection.selectedRecord.facilityName || query, 2_500);
+  if (shouldOpenSelectedRecord) {
+    if (!clickedSelectedRecord) {
+      throw new Error("The latest available portal record could not be opened for capture. Search again and select the facility row manually.");
+    }
+
+    const recordReady = await waitForFacilityRecordReady(page, selection.selectedRecord.facilityName || query, 6_000);
+    if (!recordReady) {
+      throw new Error("The latest available portal record opened, but the facility detail page did not become ready for capture. Wait for the portal to finish loading, then try Capture again.");
+    }
   }
 
   const openedText = await getVisibleText(page);

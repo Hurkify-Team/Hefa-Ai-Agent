@@ -28,10 +28,10 @@ export async function POST(request: Request) {
     }
 
     const rowIndex = payload.rowIndex ?? rowIndexFromPortalFacilityId(payload.portalFacilityId);
-    if (typeof rowIndex === "number") {
-      await openSearchResultRecord({ rowIndex });
-    } else if (payload.facilityName?.trim()) {
+    if (payload.facilityName?.trim()) {
       await searchFacility({ facilityName: payload.facilityName.trim(), openSelectedRecord: true });
+    } else if (typeof rowIndex === "number") {
+      await openSearchResultRecord({ rowIndex });
     }
 
     const detail = await captureSelectedPortalFacilityDetail();

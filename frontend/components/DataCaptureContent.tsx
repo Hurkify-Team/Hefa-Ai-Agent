@@ -665,8 +665,7 @@ export function DataCaptureContent() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          rowIndex: selectedPortalRecord?.index,
-          facilityName,
+          facilityName: facilityName || selectedPortalRecord?.facilityName || "",
         }),
       });
       const capturedData = capture.capturedData ?? {};
