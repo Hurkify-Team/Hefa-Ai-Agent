@@ -6023,15 +6023,17 @@ export async function openSearchResultRecord({ rowIndex }: OpenSearchResultInput
     throw new Error("No previous portal search results are available. Search the portal first before opening a result row.");
   }
 
-  const selectedRecord = rows[rowIndex];
+  const selectedRecord = rows.find((row) => row.index === rowIndex) ?? rows[rowIndex];
   if (!selectedRecord) {
     throw new Error(`Invalid portal row index: ${rowIndex}`);
   }
 
-  const clickedSelectedRecord = await openFacilityResult(page, rowIndex).catch(() => false);
-  if (clickedSelectedRecord) {
-    await waitForFacilityRecordReady(page, selectedRecord.facilityName || query, 2_500);
+  const clickedSelectedRecord = await openFacilityResult(page, selectedRecord.index).catch(() => false);
+  if (!clickedSelectedRecord) {
+    throw new Error("The selected portal record could not be opened. Search again, then choose the facility row from the Portal Matches list.");
   }
+
+  await waitForFacilityRecordReady(page, selectedRecord.facilityName || query, 2_500);
 
   const openedText = await getVisibleText(page);
   const renewalSelection = buildRenewalSelectionFromRecord({
