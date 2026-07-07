@@ -32,19 +32,55 @@ function normalizeCategoryMatchValue(value: string) {
     .trim();
 }
 
+function categoryTokens(value: string) {
+  return normalizeCategoryMatchValue(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length > 1);
+}
+
+function portalCategoryAliases(portalCategory: string) {
+  const normalized = normalizeCategoryMatchValue(portalCategory);
+  const aliases = new Set([normalized]);
+
+  if (normalized.includes("industrial") && normalized.includes("clinic")) aliases.add("industrial clinic");
+  if (normalized.includes("industrial") && normalized.includes("hospital")) aliases.add("industrial hospital");
+  if (normalized.includes("clinic")) aliases.add("clinic");
+  if (normalized.includes("hospital")) aliases.add("hospital");
+  if (normalized.includes("laboratory") || normalized.includes("lab")) aliases.add("laboratory");
+  if (normalized.includes("diagnostic")) aliases.add("diagnostics");
+  if (normalized.includes("maternity")) aliases.add("maternity home");
+
+  return [...aliases].filter(Boolean);
+}
+
 export function resolvePortalCategory(tabs: SheetTab[], portalCategory?: string | null) {
-  const normalizedPortalCategory = portalCategory ? normalizeCategoryMatchValue(portalCategory) : "";
+  const aliases = portalCategory ? portalCategoryAliases(portalCategory) : [];
 
-  if (!normalizedPortalCategory) return null;
+  if (!aliases.length) return null;
 
-  return (
-    tabs.find((tab) => normalizeCategoryMatchValue(tab.title) === normalizedPortalCategory)?.title ??
-    tabs.find((tab) => {
-      const normalizedTab = normalizeCategoryMatchValue(tab.title);
-      return normalizedTab.includes(normalizedPortalCategory) || normalizedPortalCategory.includes(normalizedTab);
-    })?.title ??
-    null
-  );
+  const normalizedTabs = tabs.map((tab) => ({ ...tab, normalized: normalizeCategoryMatchValue(tab.title), tokens: categoryTokens(tab.title) }));
+
+  for (const alias of aliases) {
+    const exact = normalizedTabs.find((tab) => tab.normalized === alias);
+    if (exact) return exact.title;
+  }
+
+  for (const alias of aliases) {
+    const contained = normalizedTabs.find((tab) => tab.normalized.includes(alias) || alias.includes(tab.normalized));
+    if (contained) return contained.title;
+  }
+
+  const portalTokens = new Set(categoryTokens(portalCategory ?? ""));
+  const scoredTabs = normalizedTabs
+    .map((tab) => ({
+      tab,
+      score: tab.tokens.reduce((score, token) => score + (portalTokens.has(token) ? 1 : 0), 0),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score || a.tab.title.length - b.tab.title.length);
+
+  return scoredTabs[0]?.tab.title ?? null;
 }
 
 function flattenValue(value: unknown): string {
@@ -155,7 +191,7 @@ function unmappedCapturedFields(capturedFields: Record<string, unknown>, mapped:
 export async function buildDataCapturePreview(detail: PortalFacilityDetailRecord): Promise<DataCapturePreview> {
   const tabs = await readSheetTabs();
   const targetSheet = resolvePortalCategory(tabs, detail.category);
-  const warnings = [...(detail.captureWarnings ?? [])];
+  const warnings = (detail.captureWarnings ?? []).filter((warning) => !/not captured within timeout/i.test(warning));
   const capturedFields = mergeCapturedFields(detail);
 
   if (!targetSheet) {
