@@ -327,6 +327,11 @@ export type PortalFacilityDetailRecord = {
   captureWarnings?: string[];
   scanMode?: PortalScanMode;
   recapturedAt?: string;
+  registrationApprovedAt?: string | null;
+  approvalMonth?: string | null;
+  approvalYear?: string | null;
+  approvalDateSource?: string | null;
+  approvalDateWarning?: string | null;
 };
 
 type JsonFileCache<T> = {
@@ -3363,6 +3368,57 @@ function detailValue(fields: Record<string, string>, label: string) {
   return findFieldValueByAliases(fields, PORTAL_DETAIL_FIELD_ALIASES[label] ?? [label]);
 }
 
+
+function parsePortalApprovalDateValue(value: unknown) {
+  const text = cleanPortalText(String(value ?? "")).replace(/(\d+)(st|nd|rd|th)\b/gi, "$1").replace(/,/g, " ");
+  if (!text || /^(n\/?a|not applicable|null|nil|none|-|—)$/i.test(text)) return null;
+  const numeric = text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/);
+  if (numeric) {
+    let first = Number(numeric[1]);
+    let second = Number(numeric[2]);
+    let year = Number(numeric[3]);
+    if (year < 100) year += 2000;
+    const day = first > 12 ? first : second > 12 ? second : first;
+    const month = first > 12 ? second : second > 12 ? first : second;
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate())).toISOString();
+  const yearOnly = text.match(/\b(20\d{2}|19\d{2})\b/);
+  if (yearOnly) return new Date(Date.UTC(Number(yearOnly[1]), 0, 1)).toISOString();
+  return null;
+}
+
+function registrationApprovalInfo(workflow: PortalWorkflowDetails, sourceRecord: PortalFacilityRecord, capturedAt: string) {
+  const candidates = [
+    { source: "registrationApprovedDate", value: workflow.registrationApprovedDate },
+    { source: "approvalDate", value: workflow.registrationApprovedDate },
+    { source: "lastActivityDate", value: workflow.lastActivityDate },
+    { source: "registrationDate", value: sourceRecord.recordDate },
+    { source: "capturedAt", value: capturedAt },
+  ];
+  for (const candidate of candidates) {
+    const parsed = parsePortalApprovalDateValue(candidate.value);
+    if (!parsed) continue;
+    const fallback = candidate.source === "capturedAt";
+    return {
+      approvalDateSource: candidate.source,
+      approvalDateWarning: fallback ? "Approval date was not visible; captured/scanned date is retained only as a fallback and excluded from monthly/yearly approval trends." : null,
+      approvalMonth: fallback ? null : parsed.slice(0, 7),
+      approvalYear: fallback ? null : parsed.slice(0, 4),
+      registrationApprovedAt: parsed,
+    };
+  }
+  return {
+    approvalDateSource: null,
+    approvalDateWarning: "Registration approved date was not captured from the portal.",
+    approvalMonth: null,
+    approvalYear: null,
+    registrationApprovedAt: null,
+  };
+}
+
 function parsePortalYear(value: unknown) {
   const match = cleanPortalText(String(value ?? "")).match(/\b(20\d{2}|19\d{2})\b/);
   return match ? Number(match[1]) : null;
@@ -3794,6 +3850,8 @@ async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacil
     ...(captureWarnings.length ? { "Capture Warnings": captureWarnings.join("; ") } : {}),
   };
   const text = [buildPortalSnapshotText({ bodyText, formFields, tables }), staffDetailsText].filter(Boolean).join("\n");
+  const capturedAt = new Date().toISOString();
+  const approvalInfo = registrationApprovalInfo(workflow, sourceRecord, capturedAt);
 
   return {
     admissionBeds: bedDistribution.admissionBeds,
@@ -3802,7 +3860,7 @@ async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacil
     bodyText,
     cacheKey: portalDetailCacheKey(sourceRecord),
     couches: bedDistribution.couches,
-    capturedAt: new Date().toISOString(),
+    capturedAt,
     captureWarnings,
     category: sourceRecord.category,
     documents,
@@ -3831,6 +3889,7 @@ async function captureFacilityDetailRecord(page: Page, sourceRecord: PortalFacil
     url: page.url(),
     visibleFields,
     workflow,
+    ...approvalInfo,
   };
 }
 

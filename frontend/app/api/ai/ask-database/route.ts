@@ -8,7 +8,7 @@ import { askDatabaseSchema } from "@/lib/validators";
 export const runtime = "nodejs";
 
 function isKnowledgeEngineQuestion(question: string) {
-  return /document(s)? queried|reminder queue|requires reminders|require reminders|need reminders|hefamaa action|staff action|internal attention|final approval pending|awaiting final approval|overdue renewal|renewal overdue|stale cache|changed status|status changed|notification|admission beds?|observation beds?|no of couches|couches?|operating officer|medical professional in charge|medical professional in-charge|medical officer in charge|officer in charge|professional in charge|hefa no|hef\/?no|hef no|hefamaa no|hefa number|facility code|facility id/i.test(question.toLowerCase());
+  return /document(s)? queried|reminder queue|requires reminders|require reminders|need reminders|hefamaa action|staff action|internal attention|final approval pending|awaiting final approval|overdue renewal|renewal overdue|stale cache|changed status|status changed|notification|admission beds?|observation beds?|no of couches|couches?|operating officer|medical professional in charge|medical professional in-charge|medical officer in charge|officer in charge|professional in charge|hefa no|hef\/?no|hef no|hefamaa no|hefa number|facility code|facility id|registration approv|approved facilities|approval trend|monthly registration approv|yearly registration approv|approved in|highest registration approval/i.test(question.toLowerCase());
 }
 
 function toSheetRows(rows: Array<Record<string, unknown>> | undefined): SheetRow[] | undefined {

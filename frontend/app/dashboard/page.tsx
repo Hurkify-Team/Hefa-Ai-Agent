@@ -53,6 +53,35 @@ type PortalAnalytics = {
   cacheEmpty?: boolean;
 };
 
+type RegistrationApprovedFacilityRow = {
+  id: string;
+  facilityName: string | null;
+  facilityCode: string | null;
+  category: string | null;
+  lga: string | null;
+  approvalDate: string | null;
+  approvalMonth: string | null;
+  approvalYear: string | null;
+  approvalDateSource: string | null;
+  approvalDateWarning: string | null;
+  portalStatus: string;
+  lastScanDate: string | null;
+};
+
+type RegistrationApprovedAnalytics = {
+  totalApproved: number;
+  approvedThisMonth: number;
+  approvedLastMonth: number;
+  approvedThisYear: number;
+  approvedLastYear: number;
+  approvedWithoutDate: number;
+  monthly: Array<{ month: string; count: number }>;
+  yearly: Array<{ year: string; count: number }>;
+  facilities: RegistrationApprovedFacilityRow[];
+  source: "portal_cache";
+  lastScan: string | null;
+};
+
 type WorkbookReportSummary = {
   dataSourceLabel?: string;
   fileName?: string;
@@ -118,6 +147,10 @@ function rowLabel(row: SheetRow) {
 export default function DashboardPage() {
   const [summary, setSummary] = useState<WorkbookReportSummary | null>(null);
   const [portalAnalytics, setPortalAnalytics] = useState<PortalAnalytics | null>(null);
+  const [registrationApprovedAnalytics, setRegistrationApprovedAnalytics] = useState<RegistrationApprovedAnalytics | null>(null);
+  const [approvalDrilldown, setApprovalDrilldown] = useState<RegistrationApprovedAnalytics | null>(null);
+  const [approvalDrilldownTitle, setApprovalDrilldownTitle] = useState("");
+  const [isApprovalDrilldownLoading, setIsApprovalDrilldownLoading] = useState(false);
   const [tabs, setTabs] = useState<SheetTab[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [question, setQuestion] = useState("");
@@ -136,11 +169,12 @@ export default function DashboardPage() {
     setIsLoading(true);
     setError(null);
 
-    const [summaryResult, tabsResult, auditResult, portalAnalyticsResult] = await Promise.allSettled([
+    const [summaryResult, tabsResult, auditResult, portalAnalyticsResult, registrationApprovedResult] = await Promise.allSettled([
       fetchApi<WorkbookReportSummary>("/api/reports/summary"),
       fetchApi<SheetTab[]>("/api/sheets/tabs"),
       fetchApi<AuditEntry[]>("/api/audit/list?limit=5"),
       fetchApi<PortalAnalytics>("/api/portal/analytics"),
+      fetchApi<RegistrationApprovedAnalytics>("/api/portal/registration-approved-analytics"),
     ]);
 
     const warnings: string[] = [];
@@ -173,8 +207,41 @@ export default function DashboardPage() {
       warnings.push("Portal scan analytics unavailable: " + (portalAnalyticsResult.reason instanceof Error ? portalAnalyticsResult.reason.message : "Unknown error"));
     }
 
+    if (registrationApprovedResult.status === "fulfilled") {
+      setRegistrationApprovedAnalytics(registrationApprovedResult.value);
+    } else {
+      setRegistrationApprovedAnalytics(null);
+      warnings.push("Registration approved analytics unavailable: " + (registrationApprovedResult.reason instanceof Error ? registrationApprovedResult.reason.message : "Unknown error"));
+    }
+
     setError(warnings.length ? warnings.join(" ") : null);
     setIsLoading(false);
+  }
+
+  async function loadApprovalDrilldown(title: string, params: Record<string, string>) {
+    setIsApprovalDrilldownLoading(true);
+    setApprovalDrilldownTitle(title);
+    try {
+      const query = new URLSearchParams(params).toString();
+      setApprovalDrilldown(await fetchApi<RegistrationApprovedAnalytics>("/api/portal/registration-approved-analytics?" + query));
+    } catch (error) {
+      setApprovalDrilldown({
+        approvedLastMonth: 0,
+        approvedLastYear: 0,
+        approvedThisMonth: 0,
+        approvedThisYear: 0,
+        approvedWithoutDate: 0,
+        facilities: [],
+        lastScan: null,
+        monthly: [],
+        source: "portal_cache",
+        totalApproved: 0,
+        yearly: [],
+      });
+      setApprovalDrilldownTitle(error instanceof Error ? error.message : "Unable to load registration approved drill-down");
+    } finally {
+      setIsApprovalDrilldownLoading(false);
+    }
   }
 
   async function askQuestion(event: FormEvent<HTMLFormElement>) {
@@ -258,6 +325,10 @@ export default function DashboardPage() {
 
   const topCategories = summary?.categorySummary.slice(0, 6) ?? [];
   const topLgas = summary?.lgaSummary.slice(0, 6) ?? [];
+  const approvalMonthlyTrend = registrationApprovedAnalytics?.monthly.slice(-12) ?? [];
+  const approvalYearlyTrend = registrationApprovedAnalytics?.yearly.slice(-6) ?? [];
+  const maxApprovalMonth = Math.max(1, ...approvalMonthlyTrend.map((item) => item.count));
+  const maxApprovalYear = Math.max(1, ...approvalYearlyTrend.map((item) => item.count));
   const matchedRows = questionResult?.rows?.slice(0, 5) ?? [];
 
   return (
@@ -333,6 +404,121 @@ export default function DashboardPage() {
           ) : (
             <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-[13px] font-semibold text-slate-500">
               No portal scan data yet. Run a portal scan to activate portal analytics.
+            </p>
+          )}
+        </section>
+
+
+        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="h-5 w-5 text-blue-600" />
+              <div>
+                <h2 className="text-[17px] font-bold text-slate-950">Registration Approved Analytics</h2>
+                <p className="mt-1 text-[12px] font-semibold text-slate-500">Monthly and yearly approval trends from portal scan cache only</p>
+              </div>
+            </div>
+            <span className="rounded-full bg-green-50 px-3 py-1 text-[11px] font-bold text-green-700 ring-1 ring-green-100">
+              Source: Portal Cache
+            </span>
+          </div>
+
+          {registrationApprovedAnalytics ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                {[
+                  ["Total Registration Approved", registrationApprovedAnalytics.totalApproved, "bg-green-50 text-green-700"],
+                  ["Approved This Month", registrationApprovedAnalytics.approvedThisMonth, "bg-blue-50 text-blue-700"],
+                  ["Approved Last Month", registrationApprovedAnalytics.approvedLastMonth, "bg-slate-50 text-slate-700"],
+                  ["Approved This Year", registrationApprovedAnalytics.approvedThisYear, "bg-emerald-50 text-emerald-700"],
+                  ["Approved Last Year", registrationApprovedAnalytics.approvedLastYear, "bg-indigo-50 text-indigo-700"],
+                  ["Without Approval Date", registrationApprovedAnalytics.approvedWithoutDate, "bg-amber-50 text-amber-700"],
+                ].map(([label, value, tone]) => (
+                  <article className="rounded-lg border border-slate-100 bg-slate-50/70 p-4" key={String(label)}>
+                    <span className={"mb-3 inline-flex rounded-lg px-2.5 py-1 text-[11px] font-extrabold " + String(tone)}>{String(label)}</span>
+                    <p className="text-[22px] font-extrabold text-slate-950">{formatNumber(Number(value))}</p>
+                  </article>
+                ))}
+              </div>
+
+              <p className="rounded-lg border border-amber-100 bg-amber-50 px-4 py-3 text-[12px] font-semibold text-amber-800">
+                Approved records without captured approval date: {formatNumber(registrationApprovedAnalytics.approvedWithoutDate)}. These records are excluded from monthly and yearly approval trend counts until a portal approval date is captured.
+              </p>
+
+              <div className="grid gap-4 xl:grid-cols-2">
+                <div className="rounded-lg border border-slate-100 p-4">
+                  <h3 className="text-[13px] font-extrabold text-slate-900">Monthly Approval Trend</h3>
+                  <div className="mt-3 space-y-2">
+                    {approvalMonthlyTrend.length ? approvalMonthlyTrend.map((item) => (
+                      <button
+                        className="grid w-full grid-cols-[82px_1fr_70px] items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-blue-50"
+                        key={item.month}
+                        onClick={() => void loadApprovalDrilldown("Registration approved in " + item.month, { month: item.month })}
+                        type="button"
+                      >
+                        <span className="text-[12px] font-bold text-slate-600">{item.month}</span>
+                        <span className="h-2 overflow-hidden rounded-full bg-slate-100"><span className="block h-full rounded-full bg-blue-600" style={{ width: String(Math.max(3, (item.count / maxApprovalMonth) * 100)) + "%" }} /></span>
+                        <span className="text-right text-[12px] font-extrabold text-slate-950">{formatNumber(item.count)}</span>
+                      </button>
+                    )) : <p className="text-[13px] font-semibold text-slate-500">No dated monthly approval records yet.</p>}
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-100 p-4">
+                  <h3 className="text-[13px] font-extrabold text-slate-900">Yearly Approval Trend</h3>
+                  <div className="mt-3 space-y-2">
+                    {approvalYearlyTrend.length ? approvalYearlyTrend.map((item) => (
+                      <button
+                        className="grid w-full grid-cols-[82px_1fr_70px] items-center gap-3 rounded-lg px-2 py-2 text-left hover:bg-green-50"
+                        key={item.year}
+                        onClick={() => void loadApprovalDrilldown("Registration approved in " + item.year, { year: item.year })}
+                        type="button"
+                      >
+                        <span className="text-[12px] font-bold text-slate-600">{item.year}</span>
+                        <span className="h-2 overflow-hidden rounded-full bg-slate-100"><span className="block h-full rounded-full bg-green-600" style={{ width: String(Math.max(3, (item.count / maxApprovalYear) * 100)) + "%" }} /></span>
+                        <span className="text-right text-[12px] font-extrabold text-slate-950">{formatNumber(item.count)}</span>
+                      </button>
+                    )) : <p className="text-[13px] font-semibold text-slate-500">No dated yearly approval records yet.</p>}
+                  </div>
+                </div>
+              </div>
+
+              {approvalDrilldownTitle ? (
+                <div className="rounded-lg border border-slate-100 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-[13px] font-extrabold text-slate-900">{approvalDrilldownTitle}</h3>
+                    <span className="text-[12px] font-bold text-slate-500">{isApprovalDrilldownLoading ? "Loading..." : formatNumber(approvalDrilldown?.facilities.length ?? 0) + " shown"}</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-left text-[12px]">
+                      <thead className="bg-slate-50 text-slate-500">
+                        <tr>
+                          {['Facility Name', 'HEFA NO / Facility Code', 'Category', 'LGA', 'Approval Date', 'Portal Status', 'Last Scan Date'].map((heading) => <th className="px-3 py-2 font-extrabold" key={heading}>{heading}</th>)}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {approvalDrilldown?.facilities.length ? approvalDrilldown.facilities.map((facility) => (
+                          <tr key={facility.id}>
+                            <td className="px-3 py-2 font-bold text-slate-900">{facility.facilityName ?? '-'}</td>
+                            <td className="px-3 py-2 text-slate-600">{facility.facilityCode ?? '-'}</td>
+                            <td className="px-3 py-2 text-slate-600">{facility.category ?? '-'}</td>
+                            <td className="px-3 py-2 text-slate-600">{facility.lga ?? '-'}</td>
+                            <td className="px-3 py-2 text-slate-600">{facility.approvalDate ? new Date(facility.approvalDate).toLocaleDateString('en-NG') : '-'}</td>
+                            <td className="px-3 py-2 text-slate-600">{facility.portalStatus}</td>
+                            <td className="px-3 py-2 text-slate-600">{facility.lastScanDate ? new Date(facility.lastScanDate).toLocaleDateString('en-NG') : '-'}</td>
+                          </tr>
+                        )) : (
+                          <tr><td className="px-3 py-4 text-slate-500" colSpan={7}>No facilities found for this approval period.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-[13px] font-semibold text-slate-500">
+              Registration approved analytics are unavailable. Run a fresh full scan to capture approval dates.
             </p>
           )}
         </section>

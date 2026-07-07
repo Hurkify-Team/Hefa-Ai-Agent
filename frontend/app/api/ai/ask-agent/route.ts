@@ -5,7 +5,7 @@ import { z } from "zod";
 import { fail, ok } from "@/lib/apiResponse";
 import { answerGlobalFacilityTotalQuestion, isGlobalFacilityTotalQuestion } from "@/lib/fastFacilitySummary";
 import { readPortalListCacheLightweight } from "@/lib/portalCacheStore";
-import { buildPortalWorkflowSummary, PORTAL_WORKFLOW_LABELS, type PortalWorkflowStatus } from "@/lib/portalWorkflow";
+import { answerRegistrationApprovedAnalyticsQuestion, buildPortalWorkflowSummary, isRegistrationApprovedAnalyticsQuestion, PORTAL_WORKFLOW_LABELS, type PortalWorkflowStatus } from "@/lib/portalWorkflow";
 
 export const runtime = "nodejs";
 
@@ -527,6 +527,17 @@ export async function POST(request: Request) {
           actions: [],
         });
       }
+    }
+
+    if (requestedSources.includes("portal") && isRegistrationApprovedAnalyticsQuestion(payload.question)) {
+      const result = answerRegistrationApprovedAnalyticsQuestion(payload.question, /show|list|which|display|facilities/i.test(payload.question));
+      return ok({
+        question: payload.question,
+        answer: result.answer,
+        rows: result.rows,
+        sources: [{ source: "portal", label: SOURCE_LABELS.portal, status: "ok", summary: result.summary }],
+        actions: exportActionsForQuestion(payload.question),
+      });
     }
 
     if (requestedSources.includes("portal") && isPortalWorkflowQuestion(payload.question)) {

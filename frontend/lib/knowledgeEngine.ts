@@ -4,7 +4,7 @@ import { detectIntent, type DetectedIntent } from "@/lib/intentDetector";
 import { buildNotificationIntelligence } from "@/lib/notificationEngine";
 import { normalizeFacilityName, normalizeHeaderName, normalizeLGA } from "@/lib/normalizers";
 import { readPortalCacheRows, type PortalCacheRow } from "@/lib/portalCacheModel";
-import { buildPortalWorkflowSummary, PORTAL_WORKFLOW_LABELS, type PortalWorkflowStatus } from "@/lib/portalWorkflow";
+import { answerRegistrationApprovedAnalyticsQuestion, buildPortalWorkflowSummary, isRegistrationApprovedAnalyticsQuestion, PORTAL_WORKFLOW_LABELS, type PortalWorkflowStatus } from "@/lib/portalWorkflow";
 import { searchFacilityIndex } from "@/lib/facilitySearchIndex";
 import { nonEmptyRows, readLimitedWorkbook } from "@/lib/lightweightSheets";
 import { getSourceAllSheetData, isWorkbookSourceConfigured, WORKBOOK_SOURCE_LABELS, type WorkbookSource } from "@/lib/workbookSources";
@@ -678,6 +678,27 @@ export async function answerQuestion(input: KnowledgeAnswerInput): Promise<Knowl
   let answer = "I could not understand the question well enough to calculate an answer yet.";
   let rows: Array<Record<string, unknown>> = [];
   const summary: Record<string, unknown> = { intent: intent.intent, sources };
+
+  if (sources.includes("portal_cache") && isRegistrationApprovedAnalyticsQuestion(input.question)) {
+    const result = answerRegistrationApprovedAnalyticsQuestion(input.question, intent.requiresList);
+    const resultRows = result.rows?.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, value ?? null])));
+    updateConversationMemory(input.sessionId, {
+      lastCategory: intent.entities.category,
+      lastFacilityName: intent.entities.facilityName,
+      lastIntent: intent.intent,
+      lastLGA: intent.entities.lga,
+      lastResultSet: resultRows,
+    });
+    return {
+      actions: [{ description: "Open portal scan intelligence", href: "/portal-scan", label: "Open Portal Scan", source: "portal" }],
+      answer: result.answer,
+      confidence: intent.confidence,
+      intent,
+      rows: resultRows,
+      sources: sourceStatus,
+      summary: result.summary as Record<string, unknown>,
+    };
+  }
 
   if (sources.includes("portal_cache") && (sectorFromQuestion(input.question) || workflowStatusFromQuestion(input.question))) {
     const result = portalWorkflowAnswer(input.question, intent.requiresList);

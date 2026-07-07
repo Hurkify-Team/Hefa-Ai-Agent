@@ -40,6 +40,11 @@ type QaIndexRecord = {
   url?: string;
   visibleFields?: Record<string, string>;
   workflow?: Record<string, unknown>;
+  registrationApprovedAt?: string | null;
+  approvalMonth?: string | null;
+  approvalYear?: string | null;
+  approvalDateSource?: string | null;
+  approvalDateWarning?: string | null;
 };
 
 type QaIndexFile = { records?: QaIndexRecord[]; sourceMtimeMs?: number; version?: number };
@@ -75,6 +80,11 @@ export type PortalCacheRow = {
   source_url: string | null;
   captured_at: string | null;
   updated_at: string | null;
+  registrationApprovedAt: string | null;
+  approvalMonth: string | null;
+  approvalYear: string | null;
+  approvalDateSource: string | null;
+  approvalDateWarning: string | null;
 };
 
 const SECTION_HEADERS = [
@@ -217,6 +227,101 @@ function sectorFromRecord(input: { fields?: Record<string, string>; structured?:
   return normalized === "UNKNOWN" ? null : normalized;
 }
 
+
+function valueFromObjectAliases(value: unknown, aliases: string[]) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const normalizedAliases = aliases.map(normalize).filter(Boolean);
+  for (const [key, fieldValue] of Object.entries(value as Record<string, unknown>)) {
+    const normalizedKey = normalize(key);
+    if (normalizedAliases.some((alias) => normalizedKey === alias || normalizedKey.includes(alias) || alias.includes(normalizedKey))) {
+      const cleaned = clean(fieldValue);
+      if (cleaned) return cleaned;
+    }
+  }
+  return "";
+}
+
+function parsePortalDateValue(value: unknown) {
+  const text = clean(value).replace(/(\d+)(st|nd|rd|th)\b/gi, "$1").replace(/,/g, " ");
+  if (!text || /^(n\/?a|not applicable|null|nil|none|-|—)$/i.test(text)) return null;
+
+  const numeric = text.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})\b/);
+  if (numeric) {
+    let first = Number(numeric[1]);
+    let second = Number(numeric[2]);
+    let year = Number(numeric[3]);
+    if (year < 100) year += 2000;
+    const day = first > 12 ? first : second > 12 ? second : first;
+    const month = first > 12 ? second : second > 12 ? first : second;
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate())).toISOString();
+  }
+
+  const yearOnly = text.match(/\b(20\d{2}|19\d{2})\b/);
+  if (yearOnly) return new Date(Date.UTC(Number(yearOnly[1]), 0, 1)).toISOString();
+  return null;
+}
+
+function monthFromIso(value: string | null) {
+  return value ? value.slice(0, 7) : null;
+}
+
+function yearFromIso(value: string | null) {
+  return value ? value.slice(0, 4) : null;
+}
+
+function approvalInfoForRecord(input: {
+  capturedAt?: string | null;
+  fields?: Record<string, string>;
+  recordDate?: string | null;
+  structured?: Record<string, unknown>;
+  text?: string;
+  updatedAt?: string | null;
+}) {
+  const fields = input.fields ?? {};
+  const workflow = input.structured?.workflow && typeof input.structured.workflow === "object" && !Array.isArray(input.structured.workflow)
+    ? input.structured.workflow as Record<string, unknown>
+    : {};
+  const identification = input.structured?.identification && typeof input.structured.identification === "object" && !Array.isArray(input.structured.identification)
+    ? input.structured.identification as Record<string, unknown>
+    : {};
+  const text = input.text ?? "";
+
+  const candidates = [
+    { source: "registrationApprovedDate", value: clean(workflow.registrationApprovedDate) || valueFromObjectAliases(workflow, ["registration approved date"]) || globalValue(text, ["Registration Approved Date"], fields) },
+    { source: "approvalDate", value: clean(workflow.approvalDate) || valueFromObjectAliases(workflow, ["approval date", "approved date", "date of approval"]) || globalValue(text, ["Approval Date", "Approved Date", "Date of Approval"], fields) },
+    { source: "lastActivityDate", value: clean(workflow.lastActivityDate) || globalValue(text, ["Last Activity Date", "Last Activity"], fields) },
+    { source: "registrationDate", value: clean(workflow.registrationDate) || clean(identification.registrationDate) || clean(input.recordDate) || globalValue(text, ["Registration Date", "Date Registered", "Date of Registration"], fields) },
+    { source: "capturedAt", value: clean(input.capturedAt) || clean(input.updatedAt) },
+  ];
+
+  for (const candidate of candidates) {
+    const parsed = parsePortalDateValue(candidate.value);
+    if (!parsed) continue;
+    const isFallback = candidate.source === "capturedAt";
+    return {
+      approvalDateSource: candidate.source,
+      approvalDateWarning: isFallback ? "Approval date was not visible; captured/scanned date is retained only as a fallback and excluded from monthly/yearly approval trends." : null,
+      approvalMonth: isFallback ? null : monthFromIso(parsed),
+      approvalYear: isFallback ? null : yearFromIso(parsed),
+      registrationApprovedAt: parsed,
+    };
+  }
+
+  return {
+    approvalDateSource: null,
+    approvalDateWarning: "Registration approved date was not captured from the portal cache.",
+    approvalMonth: null,
+    approvalYear: null,
+    registrationApprovedAt: null,
+  };
+}
+
 function parseBedNumber(value: unknown) {
   const text = clean(value);
   if (!text || /^(n\/?a|not applicable|null|nil|none|-|—)$/i.test(text)) return null;
@@ -327,6 +432,8 @@ function detailToRow(record: LightweightPortalFacilityDetailRecord, index: numbe
     workflow: record.workflow ?? null,
   };
 
+  const approvalInfo = approvalInfoForRecord({ capturedAt: record.capturedAt, fields, recordDate: record.recordDate, structured: structuredData, text, updatedAt: record.sourceRecord?.lastSeen });
+
   return {
     id: rowId(record, index),
     facility_name: clean(record.facilityName) || null,
@@ -354,6 +461,7 @@ function detailToRow(record: LightweightPortalFacilityDetailRecord, index: numbe
     source_url: clean(record.url) || null,
     captured_at: clean(record.capturedAt) || null,
     updated_at: clean(record.capturedAt) || clean(record.sourceRecord?.lastSeen) || null,
+    ...approvalInfo,
   };
 }
 
@@ -380,6 +488,8 @@ function qaToRow(record: QaIndexRecord, index: number): PortalCacheRow {
     visibleFields: record.visibleFields ?? null,
     workflow: record.workflow ?? null,
   };
+  const approvalInfo = approvalInfoForRecord({ capturedAt: record.capturedAt, fields: mergedFields, recordDate: record.recordDate, structured: structuredData, text, updatedAt: record.sourceRecord?.lastSeen });
+
   return {
     id: rowId(record as LightweightPortalFacilityRecord, index),
     facility_name: clean(record.facilityName) || null,
@@ -407,12 +517,16 @@ function qaToRow(record: QaIndexRecord, index: number): PortalCacheRow {
     source_url: clean(record.url) || null,
     captured_at: clean(record.capturedAt) || null,
     updated_at: clean(record.capturedAt) || clean(record.sourceRecord?.lastSeen) || null,
+    ...approvalInfo,
   };
 }
 
 function listToRow(record: LightweightPortalFacilityRecord, index: number): PortalCacheRow {
   const text = textOf(record);
   const status = clean(record.registrationStatus || record.normalizedStatus);
+  const structuredData = { renewalYear: record.renewalYear ?? null, visibleFields: record.visibleFields ?? null };
+  const approvalInfo = approvalInfoForRecord({ capturedAt: record.lastSeen, fields: record.visibleFields, structured: structuredData, text, updatedAt: record.lastSeen });
+
   return {
     id: rowId(record, index),
     facility_name: clean(record.facilityName) || null,
@@ -436,10 +550,11 @@ function listToRow(record: LightweightPortalFacilityRecord, index: number): Port
     doctors_count: null,
     nurses_count: null,
     raw_portal_text: text || null,
-    structured_portal_data: { renewalYear: record.renewalYear ?? null, visibleFields: record.visibleFields ?? null },
+    structured_portal_data: structuredData,
     source_url: null,
     captured_at: clean(record.lastSeen) || null,
     updated_at: clean(record.lastSeen) || null,
+    ...approvalInfo,
   };
 }
 
