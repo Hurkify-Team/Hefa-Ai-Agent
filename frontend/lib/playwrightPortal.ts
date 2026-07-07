@@ -6076,6 +6076,27 @@ export async function openSearchResultRecord({ rowIndex }: OpenSearchResultInput
 }
 
 
+export async function captureSelectedPortalFacilityDetail() {
+  const session = await getActiveSession();
+  const selectedRecord = session.renewalSelection?.selectedRecord;
+
+  if (!selectedRecord) {
+    throw new Error("No portal facility record is selected. Search the portal and open the correct facility first.");
+  }
+
+  const normalizedStatus = normalizePortalStatus(selectedRecord.registrationStatus, selectedRecord.renewalYear);
+  const sourceRecord: PortalFacilityRecord = {
+    ...selectedRecord,
+    applicationType: inferPortalApplicationType(selectedRecord, normalizedStatus),
+    lastSeen: new Date().toISOString(),
+    normalizedStatus,
+  };
+  const detail = await captureFacilityDetailRecord(session.page, sourceRecord);
+  await persistPortalStorageState(session);
+
+  return detail;
+}
+
 export async function captureCurrentPageText() {
   const session = await getActiveSession();
   const { page } = session;

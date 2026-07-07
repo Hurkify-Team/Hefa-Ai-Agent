@@ -50,16 +50,25 @@ type PortalSearchMatch = {
 };
 
 type PortalCaptureResult = {
-  url: string;
-  text: string;
+  url?: string;
+  text?: string;
   bodyText?: string;
   formFields?: CapturedPortalField[];
-  tables: string[][][];
+  tables?: string[][][];
   currentRenewalYear?: number;
   latestAvailableRenewalYear?: number | null;
   renewalStatus?: "current_year" | "latest_available_previous_year" | "unknown_year";
   selectedPortalRecord?: PortalSearchMatch | null;
   selectedRenewalYear?: number | null;
+  capturedData?: Record<string, unknown>;
+  confidence?: number;
+  duplicate?: DuplicateCheckResult | null;
+  headers?: string[];
+  mappedFields?: SheetRow;
+  missingFields?: string[];
+  targetSheet?: string | null;
+  unmappedFields?: string[];
+  warnings?: string[];
 };
 
 type PortalActionResult = {
@@ -124,6 +133,15 @@ type AppendFacilityResult = {
     header: string;
     value: number;
   } | null;
+};
+
+type DataCaptureSaveResult = {
+  success: true;
+  sheet: string;
+  rowNumber: number;
+  action: "inserted" | "updated";
+  mappedFields: string[];
+  unmappedFields: string[];
 };
 
 type LegacyFieldSuggestion = {
@@ -271,6 +289,7 @@ export function DataCaptureContent() {
   const [needsDuplicateRecheck, setNeedsDuplicateRecheck] = useState(false);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [preparedSavePreview, setPreparedSavePreview] = useState<PreparedSavePreview | null>(null);
+  const [capturedDataForSave, setCapturedDataForSave] = useState<Record<string, unknown> | null>(null);
   const [legacyResolution, setLegacyResolution] = useState<LegacyFallbackResolution | null>(null);
   const [isResolvingLegacy, setIsResolvingLegacy] = useState(false);
   const preserveCaptureOnNextHeaderLoad = useRef(false);
@@ -482,7 +501,7 @@ export function DataCaptureContent() {
     setIsSearchingPortal(true);
 
     try {
-      const result = await fetchApi<PortalActionResult>("/api/portal/search", {
+      const result = await fetchApi<PortalActionResult>("/api/data-capture/search-portal", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -640,72 +659,81 @@ export function DataCaptureContent() {
     setIsCapturingPortal(true);
 
     try {
-      const capture = await fetchApi<PortalCaptureResult>("/api/portal/capture", {
-        method: "POST",
-      });
-      const portalRecord = capture.selectedPortalRecord ?? selectedPortalRecord;
-      const portalCategory = portalRecord?.category?.trim();
-      const matchedCategory = resolvePortalCategory(activeTabs, portalCategory);
-      const mappingCategory = matchedCategory ?? activeCategory;
-      const headerData = await loadHeadersForCategory(mappingCategory);
-      const mapped = await fetchApi<FieldMappingResult>("/api/ai/map-fields", {
+      const capture = await fetchApi<PortalCaptureResult>("/api/data-capture/capture-portal-facility", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          category: mappingCategory,
-          headers: headerData.headers,
-          portalText: capture.text,
+          rowIndex: selectedPortalRecord?.index,
+          facilityName,
         }),
       });
+      const capturedData = capture.capturedData ?? {};
+      const portalRecord = (capturedData.sourceRecord as PortalSearchMatch | undefined) ?? capture.selectedPortalRecord ?? selectedPortalRecord;
 
-      if (matchedCategory && matchedCategory !== activeCategory) {
+      if (!capture.targetSheet) {
+        setCapturedDataForSave(capturedData);
+        setPortalMessage((capture.warnings ?? ["Category sheet not found. Ask an administrator before creating a new category sheet."]).join(" "));
+        return;
+      }
+
+      const mapped: FieldMappingResult = {
+        category: capture.targetSheet,
+        matchedFields: capture.mappedFields ?? {},
+        missingFields: capture.missingFields ?? [],
+        confidence: capture.confidence ?? 0,
+        notes: capture.warnings ?? [],
+      };
+
+      if (capture.targetSheet !== activeCategory) {
         preserveCaptureOnNextHeaderLoad.current = true;
         setSheetError(null);
-        setActiveCategory(matchedCategory);
+        setActiveCategory(capture.targetSheet);
       }
-      setHeaders(headerData.headers);
-      setPortalUrl(capture.url);
-      setCapturedPortalFields(capture.formFields ?? []);
+
+      setHeaders(capture.headers ?? headers);
+      setPortalUrl(typeof capturedData.url === "string" ? capturedData.url : portalUrl);
+      setCapturedPortalFields((capturedData.formFields as CapturedPortalField[] | undefined) ?? capture.formFields ?? []);
       setSelectedPortalRecord(portalRecord ?? null);
       setCurrentRenewalYear(capture.currentRenewalYear ?? currentRenewalYear);
       setLatestAvailableRenewalYear(capture.latestAvailableRenewalYear ?? latestAvailableRenewalYear);
       setSelectedRenewalYear(capture.selectedRenewalYear ?? selectedRenewalYear);
       setRenewalStatus(capture.renewalStatus ?? renewalStatus);
       setMappingResult(mapped);
+      setDuplicateResult(capture.duplicate ?? null);
+      setSelectedUpdateRowIndex(capture.duplicate?.matches[0]?.rowIndex ?? null);
+      setConfirmedUpdateFields(new Set());
       setNeedsDuplicateRecheck(false);
       setSaveMessage(null);
       setPreparedSavePreview(null);
+      setCapturedDataForSave({
+        ...capturedData,
+        mappedFields: mapped.matchedFields,
+        confidence: mapped.confidence,
+        targetSheet: capture.targetSheet,
+      });
       setLegacyResolution(null);
 
-      const categoryMessage = portalCategory
-        ? matchedCategory
-          ? " Portal category " + portalCategory + " matched the " + matchedCategory + " sheet."
-          : " Portal category " + portalCategory + " was detected, but no matching sheet tab was found."
-        : " Portal category was not visible, so the current " + mappingCategory + " sheet was used.";
+      const unmappedMessage = capture.unmappedFields?.length
+        ? " " + capture.unmappedFields.length + " captured portal field" + (capture.unmappedFields.length === 1 ? " is" : "s are") + " not mapped to sheet headers."
+        : "";
 
       setPortalMessage(
-        "Captured " +
-          (capture.formFields?.length ?? 0) +
-          " form fields, " +
-          capture.tables.length +
-          " tables, and mapped " +
+        "Captured full portal details and mapped " +
           Object.keys(mapped.matchedFields).length +
           " " +
-          mappingCategory +
-          " fields." +
-          categoryMessage,
+          capture.targetSheet +
+          " fields for preview." +
+          unmappedMessage,
       );
-      await checkDuplicate(mapped, mappingCategory, headerData.headers);
-      await resolveLegacyForMapping(mapped, mappingCategory, headerData.headers);
+      await resolveLegacyForMapping(mapped, capture.targetSheet, capture.headers ?? headers);
     } catch (error) {
       setPortalMessage(error instanceof Error ? error.message : "Unable to capture portal data");
     } finally {
       setIsCapturingPortal(false);
     }
   }
-
   async function resolveLegacyForMapping(mapped: FieldMappingResult, category = mapped.category, headerList = headers) {
     setIsResolvingLegacy(true);
 
@@ -817,29 +845,38 @@ export function DataCaptureContent() {
         return;
       }
 
-      const result = await fetchApi<AppendFacilityResult>("/api/sheets/append", {
+      const dataToSave = {
+        ...(capturedDataForSave ?? {}),
+        mappedFields: mappingResult.matchedFields,
+        confidence: mappingResult.confidence,
+        url: portalUrl ?? (capturedDataForSave?.url as string | undefined),
+        targetSheet: mappingResult.category,
+      };
+      const result = await fetchApi<DataCaptureSaveResult>("/api/data-capture/save-to-sheet", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          category: mappingResult.category,
-          values: mappingResult.matchedFields,
-          user: "Admin User",
-          sourcePortalUrl: portalUrl ?? undefined,
-          confidence: mappingResult.confidence,
-          missingFields: mappingResult.missingFields,
-          saveAnyway: duplicateStatus !== "no_duplicate",
+          capturedData: dataToSave,
+          targetSheet: mappingResult.category,
+          mode: "insert_or_update",
         }),
       });
 
       setPreparedSavePreview(null);
-        setLegacyResolution(null);
+      setCapturedDataForSave(null);
+      setLegacyResolution(null);
       setSaveMessage(
-        (duplicateStatus === "no_duplicate"
-          ? `Saved to ${result.category ?? mappingResult.category} at row ${result.rowIndex + 2}.`
-          : `Saved anyway to ${result.category ?? mappingResult.category} at row ${result.rowIndex + 2}. Duplicate warning was logged.`) +
-          (result.autoSerial ? " Auto-filled " + result.autoSerial.header + " as " + result.autoSerial.value + "." : ""),
+        (result.action === "updated" ? "Updated" : "Saved") +
+          " to " +
+          result.sheet +
+          " at row " +
+          result.rowNumber +
+          ". " +
+          result.mappedFields.length +
+          " fields mapped" +
+          (result.unmappedFields.length ? "; " + result.unmappedFields.length + " fields left blank." : "."),
       );
     } catch (error) {
       setSaveMessage(error instanceof Error ? error.message : "Unable to save facility");
