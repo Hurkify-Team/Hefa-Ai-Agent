@@ -131,10 +131,14 @@ type PortalScanProgress = {
   stopRequested?: boolean;
   currentFacilityHefamaaId?: string | null;
   currentFacilityName?: string | null;
+  currentPortalPage?: number | null;
+  currentPortalRow?: number | null;
   detailTotal?: number;
   error?: string;
   failedDetails?: number;
   lastCaptureMs?: number | null;
+  lastProcessedPortalPage?: number | null;
+  lastProcessedPortalRow?: number | null;
   lastCapturedFacilityName?: string | null;
   message?: string;
   phase?: "starting" | "waiting_for_login" | "finding_facilities" | "indexing_list" | "capturing_details" | "completed";
@@ -161,6 +165,8 @@ export type PortalFacilityRecord = FacilitySearchResultRow & {
   applicationType: PortalApplicationType;
   normalizedStatus: PortalFacilityStatus;
   lastSeen: string;
+  portalPageNumber?: number | null;
+  portalRowNumber?: number | null;
 };
 
 type PortalStaffDetail = {
@@ -4047,6 +4053,27 @@ function mergeExpectedRecordWithPortalRow(expected: PortalFacilityRecord, select
   };
 }
 
+async function findExpectedPortalRowFromCachedPosition(page: Page, expected: PortalFacilityRecord) {
+  const pageNumber = expected.portalPageNumber ? Math.max(1, Math.floor(expected.portalPageNumber)) : null;
+  const rowNumber = expected.portalRowNumber ? Math.max(1, Math.floor(expected.portalRowNumber)) : null;
+
+  if (!pageNumber || !rowNumber) return null;
+
+  const positioned = await goToFacilityTablePage(page, pageNumber).catch(() => false);
+  if (!positioned) return null;
+
+  await waitForFacilityTableRows(page, facilityNavigationTimeoutMs());
+  const rows = await getFacilityResultRows(page);
+  const candidate = rows[rowNumber - 1];
+
+  if (candidate && portalRecordMatchScore(expected, candidate) > 0) {
+    return { query: "page " + pageNumber + ", row " + rowNumber, rows, selectedRow: candidate };
+  }
+
+  const selectedRow = selectExpectedPortalRow(rows, expected);
+  return selectedRow ? { query: "page " + pageNumber, rows, selectedRow } : null;
+}
+
 async function searchExpectedPortalRecord(page: Page, expected: PortalFacilityRecord) {
   const queries = Array.from(new Set([expected.facilityName, expected.hefamaaId].map(cleanPortalText).filter(Boolean)));
 
@@ -4225,7 +4252,8 @@ async function capturePortalFacilityDetails(
           });
         }
 
-        const searchResult = await searchExpectedPortalRecord(page, expectedRecord);
+        const searchResult = await findExpectedPortalRowFromCachedPosition(page, expectedRecord)
+          ?? await searchExpectedPortalRecord(page, expectedRecord);
         throwIfPortalScanStopped();
         if (!searchResult) {
           skippedDetails += 1;
@@ -4670,6 +4698,136 @@ function dedupeFacilityRecords(records: PortalFacilityRecord[]) {
   return Array.from(seen.values());
 }
 
+function portalScanListProgressPath() {
+  return configuredRuntimeFile("HEFAMAA_PORTAL_LIST_PROGRESS", "portal-list-scan-progress.json");
+}
+
+type PortalListScanProgressFile = {
+  completed: boolean;
+  mode: PortalScanMode;
+  pageNumber: number;
+  rowNumber: number;
+  savedAt: string;
+};
+
+function readPortalListScanProgress(): PortalListScanProgressFile | null {
+  const progressPath = portalScanListProgressPath();
+  if (!existsSync(progressPath)) return null;
+
+  try {
+    const parsed = JSON.parse(readFileSync(progressPath, "utf8"));
+    if (parsed && typeof parsed === "object") {
+      const pageNumber = Number(parsed.pageNumber);
+      const rowNumber = Number(parsed.rowNumber);
+      if (Number.isFinite(pageNumber) && Number.isFinite(rowNumber)) {
+        return {
+          completed: Boolean(parsed.completed),
+          mode: ["quick", "full", "fresh_full_scan"].includes(String(parsed.mode)) ? parsed.mode : "quick",
+          pageNumber: Math.max(1, Math.floor(pageNumber)),
+          rowNumber: Math.max(1, Math.floor(rowNumber)),
+          savedAt: cleanPortalText(parsed.savedAt) || new Date().toISOString(),
+        };
+      }
+    }
+  } catch {
+    // Invalid progress files are ignored so a new scan can start cleanly.
+  }
+
+  return null;
+}
+
+function writePortalListScanProgress(progress: PortalListScanProgressFile) {
+  const progressPath = portalScanListProgressPath();
+  ensureRuntimeDataDirForFile(progressPath);
+  writeFileSync(progressPath, JSON.stringify(progress, null, 2), "utf8");
+}
+
+function clearPortalListScanProgress() {
+  const progressPath = portalScanListProgressPath();
+  if (existsSync(progressPath)) {
+    rmSync(progressPath, { force: true });
+  }
+}
+
+function portalListRecordKey(record: Pick<PortalFacilityRecord, "facilityName" | "hefamaaId" | "registrationStatus" | "renewalYear">) {
+  const code = normalizePortalMatchValue(record.hefamaaId);
+  if (code) return "code:" + code;
+  const name = normalizePortalMatchValue(record.facilityName);
+  const status = normalizePortalMatchValue(record.registrationStatus);
+  const year = cleanPortalText(record.renewalYear == null ? "" : String(record.renewalYear));
+  return ["row", name, status, year].join(":");
+}
+
+function upsertPortalFacilityRecord(records: PortalFacilityRecord[], record: PortalFacilityRecord) {
+  const key = portalListRecordKey(record);
+  const existingIndex = records.findIndex((item) => portalListRecordKey(item) === key);
+  if (existingIndex >= 0) {
+    records[existingIndex] = { ...records[existingIndex], ...record };
+    return records;
+  }
+
+  records.push(record);
+  return records;
+}
+
+async function waitForFacilityTableRows(page: Page, timeout = facilityNavigationTimeoutMs()) {
+  await page.locator("#mainGrid, table#mainGrid, table.dataTable").first().waitFor({ state: "attached", timeout }).catch(() => undefined);
+  await waitForDataTableIdle(page, Math.min(timeout, 2_000)).catch(() => undefined);
+  await page.locator("#mainGrid tbody tr, table.dataTable tbody tr, .dataTable tbody tr").first().waitFor({ state: "attached", timeout }).catch(() => undefined);
+
+  return page.evaluate(() => {
+    const selectors = ["#mainGrid tbody tr", "table#mainGrid tbody tr", "table.dataTable tbody tr", ".dataTable tbody tr"];
+    for (const selector of selectors) {
+      const rows = Array.from(document.querySelectorAll(selector));
+      const usableRows = rows.filter((row) => !/no matching|no data available/i.test(row.textContent || ""));
+      if (usableRows.length) return usableRows.length;
+    }
+    return 0;
+  }).catch(() => 0);
+}
+
+async function currentFacilityTablePageNumber(page: Page) {
+  const pageFromActiveButton = await page.evaluate(() => {
+    const active = document.querySelector("#mainGrid_paginate .paginate_button.active a, #mainGrid_paginate .paginate_button.active");
+    const value = active?.textContent?.replace(/\D+/g, "") || "";
+    return value ? Number(value) : null;
+  }).catch(() => null);
+  if (pageFromActiveButton && Number.isFinite(pageFromActiveButton)) return pageFromActiveButton;
+
+  const info = await page.locator("#mainGrid_info").innerText().catch(() => "");
+  const showing = info.match(/Showing\s+([\d,]+)\s+to\s+([\d,]+)/i);
+  if (!showing) return 1;
+  const start = Number(showing[1].replace(/,/g, ""));
+  const end = Number(showing[2].replace(/,/g, ""));
+  const pageSize = Math.max(1, end - start + 1);
+  return Math.max(1, Math.ceil(start / pageSize));
+}
+
+async function goToFacilityTablePage(page: Page, targetPageNumber: number) {
+  const safeTarget = Math.max(1, Math.floor(targetPageNumber));
+  await openFacilitiesGrid(page);
+  await waitForFacilityTableRows(page, facilityNavigationTimeoutMs());
+
+  for (let guard = 0; guard < 600; guard += 1) {
+    const currentPage = await currentFacilityTablePageNumber(page);
+    if (currentPage === safeTarget) return true;
+
+    if (currentPage > safeTarget) {
+      await prepareFacilityGridForFullScan(page).catch(() => undefined);
+      const afterReset = await currentFacilityTablePageNumber(page);
+      if (afterReset === safeTarget) return true;
+      if (afterReset > safeTarget) return false;
+    }
+
+    const fingerprint = await facilityTableFingerprint(page);
+    const moved = await clickNextFacilityPage(page, fingerprint);
+    if (!moved) return false;
+    await waitForFacilityTableRows(page, facilityNavigationTimeoutMs());
+  }
+
+  return false;
+}
+
 async function facilityTableFingerprint(page: Page) {
   return page.locator("#mainGrid tbody").innerText().catch(() => "");
 }
@@ -4766,7 +4924,9 @@ async function scanFacilityList(
   maxPages = 500,
   onProgress?: (progress: PortalScanProgress) => void,
   onRecords?: (records: PortalFacilityRecord[]) => void,
+  options: { fresh?: boolean; mode?: PortalScanMode } = {},
 ) {
+  const mode = options.mode ?? "quick";
   await openFacilitiesGrid(page);
 
   await page.waitForLoadState("domcontentloaded", { timeout: 8_000 }).catch(() => undefined);
@@ -4777,14 +4937,48 @@ async function scanFacilityList(
   }
 
   await prepareFacilityGridForFullScan(page);
+  await waitForFacilityTableRows(page, facilityNavigationTimeoutMs());
+
+  const previousProgress = options.fresh ? null : readPortalListScanProgress();
+  if (options.fresh) {
+    clearPortalListScanProgress();
+  }
+
   const portalReportedRecords = await readPortalReportedRecordCount(page);
-  const gathered: PortalFacilityRecord[] = [];
+  const records = options.fresh ? [] : classifyPortalFacilityRecords(readPortalFacilityCache());
   const seenPages = new Set<string>();
+  const startPageNumber = previousProgress && !previousProgress.completed ? Math.max(1, previousProgress.pageNumber) : 1;
+  const startRowNumber = previousProgress && !previousProgress.completed ? Math.max(1, previousProgress.rowNumber) : 1;
+
+  if (startPageNumber > 1) {
+    await goToFacilityTablePage(page, startPageNumber);
+  }
 
   for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+    throwIfPortalScanStopped();
+    if (isGracefulStopRequested()) {
+      const currentPage = await currentFacilityTablePageNumber(page);
+      writePortalListScanProgress({
+        completed: false,
+        mode,
+        pageNumber: currentPage,
+        rowNumber: portalRuntime.scanProgress.currentPortalRow ?? 1,
+        savedAt: new Date().toISOString(),
+      });
+      updatePortalScanProgress({
+        completedAt: new Date().toISOString(),
+        message: "SCAN_STOPPED_BY_USER",
+        status: "cancelled",
+        stopRequested: true,
+      });
+      break;
+    }
+
+    const rowCount = await waitForFacilityTableRows(page, facilityNavigationTimeoutMs());
     const currentRows = await getFacilityResultRows(page);
+    const currentPageNumber = await currentFacilityTablePageNumber(page);
     const domFingerprint = await facilityTableFingerprint(page);
-    const pageFingerprint = currentRows.map((row) => `${row.hefamaaId}|${row.facilityName}|${row.registrationStatus}`).join("::");
+    const pageFingerprint = currentRows.map((row) => [row.hefamaaId, row.facilityName, row.registrationStatus].join("|")).join("::");
 
     if (pageFingerprint && seenPages.has(pageFingerprint)) {
       break;
@@ -4794,39 +4988,99 @@ async function scanFacilityList(
       seenPages.add(pageFingerprint);
     }
 
-    const currentRecords = currentRows.map((row) => {
-      const normalizedStatus = normalizePortalStatus(row.registrationStatus, row.renewalYear);
+    const shouldResumeInsideThisPage = previousProgress && !previousProgress.completed && currentPageNumber === startPageNumber;
+    const rowStartIndex = shouldResumeInsideThisPage ? Math.max(0, startRowNumber - 1) : 0;
 
-      return {
+    for (let rowIndex = rowStartIndex; rowIndex < currentRows.length; rowIndex += 1) {
+      throwIfPortalScanStopped();
+      if (isGracefulStopRequested()) {
+        writePortalListScanProgress({
+          completed: false,
+          mode,
+          pageNumber: currentPageNumber,
+          rowNumber: rowIndex + 1,
+          savedAt: new Date().toISOString(),
+        });
+        updatePortalScanProgress({
+          completedAt: new Date().toISOString(),
+          currentPortalPage: currentPageNumber,
+          currentPortalRow: rowIndex + 1,
+          message: "SCAN_STOPPED_BY_USER",
+          status: "cancelled",
+          stopRequested: true,
+        });
+        return { portalReportedRecords, records: classifyPortalFacilityRecords(dedupeFacilityRecords(records)) };
+      }
+
+      const row = currentRows[rowIndex];
+      const normalizedStatus = normalizePortalStatus(row.registrationStatus, row.renewalYear);
+      const record: PortalFacilityRecord = {
         ...row,
         applicationType: inferPortalApplicationType(row, normalizedStatus),
-        normalizedStatus,
         lastSeen: new Date().toISOString(),
+        normalizedStatus,
+        portalPageNumber: currentPageNumber,
+        portalRowNumber: rowIndex + 1,
       };
-    });
 
-    gathered.push(...currentRecords);
-    if ((pageIndex + 1) % 5 === 0) {
-      onRecords?.(classifyPortalFacilityRecords(dedupeFacilityRecords(gathered)));
+      upsertPortalFacilityRecord(records, record);
+      const classifiedRecords = classifyPortalFacilityRecords(dedupeFacilityRecords(records));
+      writePortalFacilityCache(stampPortalScanRecords(classifiedRecords));
+      writePortalListScanProgress({
+        completed: false,
+        mode,
+        pageNumber: currentPageNumber,
+        rowNumber: rowIndex + 2,
+        savedAt: new Date().toISOString(),
+      });
+
+      appendPortalScanEvent({
+        category: record.category,
+        facilityName: record.facilityName,
+        hefamaaId: record.hefamaaId,
+        message: "Saved portal page " + currentPageNumber + ", row " + (rowIndex + 1) + ": " + portalRecordDisplayName(record),
+        status: "info",
+      });
+      onProgress?.({
+        completedAt: null,
+        currentPortalPage: currentPageNumber,
+        currentPortalRow: rowIndex + 1,
+        lastProcessedPortalPage: currentPageNumber,
+        lastProcessedPortalRow: rowIndex + 1,
+        message: "Indexing portal page " + currentPageNumber + ", row " + (rowIndex + 1) + " of " + Math.max(rowCount, currentRows.length) + "...",
+        phase: "indexing_list",
+        portalReportedRecords,
+        scannedPages: Math.max(currentPageNumber, pageIndex + 1),
+        scannedRecords: classifiedRecords.length,
+        startedAt: portalRuntime.scanProgress.startedAt,
+        status: "running",
+      });
+      onRecords?.(classifiedRecords);
     }
-    onProgress?.({
-      completedAt: null,
-      message: "Indexing portal facility list...",
-      phase: "indexing_list",
-      portalReportedRecords,
-      scannedPages: pageIndex + 1,
-      scannedRecords: gathered.length,
-      startedAt: portalRuntime.scanProgress.startedAt,
-      status: "running",
+
+    writePortalListScanProgress({
+      completed: false,
+      mode,
+      pageNumber: currentPageNumber + 1,
+      rowNumber: 1,
+      savedAt: new Date().toISOString(),
     });
 
     const hasNext = await clickNextFacilityPage(page, domFingerprint);
     if (!hasNext) break;
   }
 
-  const records = classifyPortalFacilityRecords(dedupeFacilityRecords(gathered));
-  onRecords?.(records);
-  return { portalReportedRecords, records };
+  const finalRecords = classifyPortalFacilityRecords(dedupeFacilityRecords(records));
+  writePortalFacilityCache(stampPortalScanRecords(finalRecords));
+  writePortalListScanProgress({
+    completed: true,
+    mode,
+    pageNumber: await currentFacilityTablePageNumber(page),
+    rowNumber: 1,
+    savedAt: new Date().toISOString(),
+  });
+  onRecords?.(finalRecords);
+  return { portalReportedRecords, records: finalRecords };
 }
 
 function stampPortalScanRecords(records: PortalFacilityRecord[], lastSeen = new Date().toISOString()) {
@@ -4893,12 +5147,11 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick", op
   scanPage.setDefaultTimeout(isDetailScan ? facilityCaptureTimeoutMs() : 10_000);
   scanPage.setDefaultNavigationTimeout(isDetailScan ? facilityNavigationTimeoutMs() : 30_000);
   let partialRecords: PortalFacilityRecord[] = [];
-  let lastPartialWriteCount = 0;
 
   try {
     throwIfPortalScanStopped();
     const cachedRecords = classifyPortalFacilityRecords(readPortalFacilityCache());
-    const shouldReuseListCache = isDetailScan && cachedRecords.length > 0;
+    const shouldReuseListCache = isDetailScan && mode !== "fresh_full_scan" && cachedRecords.length > 0;
     let portalReportedRecords: number | null = null;
     let records: PortalFacilityRecord[] = [];
 
@@ -4907,9 +5160,7 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick", op
       portalReportedRecords = portalRuntime.scanProgress.portalReportedRecords ?? records.length;
       updatePortalScanProgress({
         detailTotal: latestDetailTargetRecords(records).length,
-        message: mode === "fresh_full_scan"
-          ? "Using the existing portal index. Fresh Full Scan will recapture records from the beginning and update cache records without duplicates."
-          : "Using the existing portal index. Full detail capture will open only the latest valid renewal record for each facility identity.",
+        message: "Using the existing portal index. Full detail capture will open only the latest valid renewal record for each facility identity.",
         phase: "capturing_details",
         portalReportedRecords,
         scanMode: mode,
@@ -4929,11 +5180,8 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick", op
         },
         (recordsSoFar) => {
           partialRecords = recordsSoFar;
-          if (recordsSoFar.length - lastPartialWriteCount >= 500) {
-            writePortalFacilityCache(stampPortalScanRecords(recordsSoFar));
-            lastPartialWriteCount = recordsSoFar.length;
-          }
         },
+        { fresh: mode === "fresh_full_scan", mode },
       );
       portalReportedRecords = scanned.portalReportedRecords;
       records = scanned.records;
@@ -4948,9 +5196,11 @@ export async function scanAllPortalFacilities(mode: PortalScanMode = "quick", op
 
     throwIfPortalScanStopped();
     const detailTargetRecords = mode === "fresh_full_scan"
-      ? latestUniqueFacilityRecords(datedRecords).sort((a, b) => {
-          const familyOrder = facilityRecordFamilyKey(a).localeCompare(facilityRecordFamilyKey(b));
-          if (familyOrder) return familyOrder;
+      ? [...datedRecords].sort((a, b) => {
+          const pageOrder = (a.portalPageNumber ?? Number.MAX_SAFE_INTEGER) - (b.portalPageNumber ?? Number.MAX_SAFE_INTEGER);
+          if (pageOrder) return pageOrder;
+          const rowOrder = (a.portalRowNumber ?? Number.MAX_SAFE_INTEGER) - (b.portalRowNumber ?? Number.MAX_SAFE_INTEGER);
+          if (rowOrder) return rowOrder;
           return facilityRecordKey(a).localeCompare(facilityRecordKey(b));
         })
       : latestDetailTargetRecords(datedRecords);

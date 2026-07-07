@@ -60,11 +60,15 @@ type PortalFacilitySummary = {
     stopRequested?: boolean;
     currentFacilityHefamaaId?: string | null;
     currentFacilityName?: string | null;
+    currentPortalPage?: number | null;
+    currentPortalRow?: number | null;
     error?: string;
     detailTotal?: number;
     failedDetails?: number;
     lastCaptureMs?: number | null;
     lastCapturedFacilityName?: string | null;
+    lastProcessedPortalPage?: number | null;
+    lastProcessedPortalRow?: number | null;
     message?: string;
     phase?: "starting" | "waiting_for_login" | "finding_facilities" | "indexing_list" | "capturing_details" | "completed";
     portalReportedRecords: number | null;
@@ -1004,6 +1008,8 @@ export default function PortalScanPage() {
                   ["Full Scan Ready", sessionStatus?.readyForFullScan ? "Ready" : sessionStatus?.fullScanBlockedReason || "Waiting"],
                   ["Facilities Cached", sessionStatus ? formatCount(sessionStatus.cachedFacilities) : "-"],
                   ["Current Facility", sessionStatus?.currentFacility || scanProgress?.currentFacilityName || "None"],
+                  ["Portal Page", scanProgress?.currentPortalPage ? formatCount(scanProgress.currentPortalPage) : scanProgress?.lastProcessedPortalPage ? formatCount(scanProgress.lastProcessedPortalPage) : "-"],
+                  ["Portal Row", scanProgress?.currentPortalRow ? formatCount(scanProgress.currentPortalRow) : scanProgress?.lastProcessedPortalRow ? formatCount(scanProgress.lastProcessedPortalRow) : "-"],
                   ["Scan Status", scanProgress?.stopRequested ? "Stop requested" : scanProgress?.status ?? "Idle"],
                   ["Keep Awake", scanProgress?.keepAwakeActive ? "Active" : "Idle"],
                   ["Open Tabs", formatCount(scanProgress?.openTabsCount ?? 0)],
@@ -1151,6 +1157,14 @@ export default function PortalScanPage() {
                       <p className="mt-1 text-[18px] font-extrabold text-slate-950">
                         {formatCount(scanProgress?.scannedDetails ?? 0)}{isDetailScanMode ? " / " + formatCount(detailProgressTotal ?? 0) : ""}
                       </p>
+                    </div>
+                    <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Portal page</p>
+                      <p className="mt-1 text-[18px] font-extrabold text-blue-700">{scanProgress?.currentPortalPage ? formatCount(scanProgress.currentPortalPage) : scanProgress?.lastProcessedPortalPage ? formatCount(scanProgress.lastProcessedPortalPage) : "-"}</p>
+                    </div>
+                    <div className="rounded-lg border border-white/70 bg-white/75 p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">Portal row</p>
+                      <p className="mt-1 text-[18px] font-extrabold text-blue-700">{scanProgress?.currentPortalRow ? formatCount(scanProgress.currentPortalRow) : scanProgress?.lastProcessedPortalRow ? formatCount(scanProgress.lastProcessedPortalRow) : "-"}</p>
                     </div>
                     {isDetailScanMode ? (
                       <>
