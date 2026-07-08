@@ -4,6 +4,7 @@ import { Readable } from "node:stream";
 import ExcelJS from "exceljs";
 import { google, type drive_v3, type sheets_v4 } from "googleapis";
 
+import { checkDuplicateFacility } from "@/lib/duplicateChecker";
 import { normalizeHeaderName, normalizePhoneNumber } from "@/lib/normalizers";
 import type {
   CreateSheetInput,
@@ -1131,6 +1132,81 @@ export async function addPreparedFacilityRow(prepared: PreparedFacilityRow) {
 
 export async function addNewFacilityRow(category: string, values: SheetRow) {
   return addPreparedFacilityRow(await prepareNewFacilityRow(category, values));
+}
+
+export async function appendFacilityRowFast(category: string, values: SheetRow, options: { saveAnyway?: boolean } = {}) {
+  const document = await getSpreadsheetDocument();
+
+  if (document.kind === "xlsx") {
+    const workbook = await downloadOfficeWorkbook(document);
+    const worksheet = getOfficeWorksheet(workbook, category);
+    const headerCells = readOfficeHeaderCells(worksheet);
+    const headers = headerCells.map(({ header }) => header);
+    const existingRows = readOfficeRows(worksheet, headerCells);
+    const baseRow = coerceRowToHeaders(headers, values);
+    const prepared = applyAutoSerialNumber(headers, baseRow, existingRows);
+
+    if (!options.saveAnyway) {
+      const duplicate = checkDuplicateFacility(prepared.row, existingRows);
+
+      if (duplicate.status !== "no_duplicate") {
+        const bestMatch = duplicate.matches[0];
+        releaseOfficeWorkbookCache();
+        return {
+          duplicateBlocked: true,
+          category: worksheet.name,
+          status: duplicate.status,
+          matches: duplicate.matches,
+          rowIndex: bestMatch?.rowIndex ?? 0,
+          row: bestMatch?.row ?? prepared.row,
+          autoSerial: prepared.autoSerial,
+          message: "Duplicate facility detected. Review the existing row before choosing Save Anyway.",
+        };
+      }
+    }
+
+    const nextRowNumber = nextOfficeAppendRowNumber(worksheet, headerCells);
+    const worksheetRow = worksheet.getRow(nextRowNumber);
+
+    for (const { header, columnIndex } of headerCells) {
+      worksheetRow.getCell(columnIndex).value = toWritableCellValue(prepared.row[header]);
+    }
+
+    worksheetRow.commit();
+    await uploadOfficeWorkbook(workbook);
+    clearSheetDataCache();
+
+    return {
+      category: worksheet.name,
+      rowIndex: Math.max(0, nextRowNumber - 2),
+      row: prepared.row,
+      autoSerial: prepared.autoSerial,
+    };
+  }
+
+  const prepared = await prepareNewFacilityRow(category, values);
+
+  if (!options.saveAnyway) {
+    clearSheetDataCache();
+    const existing = await readExistingRecords(prepared.category);
+    const duplicate = checkDuplicateFacility(prepared.row, existing.rows);
+
+    if (duplicate.status !== "no_duplicate") {
+      const bestMatch = duplicate.matches[0];
+      return {
+        duplicateBlocked: true,
+        category: prepared.category,
+        status: duplicate.status,
+        matches: duplicate.matches,
+        rowIndex: bestMatch?.rowIndex ?? 0,
+        row: bestMatch?.row ?? prepared.row,
+        autoSerial: prepared.autoSerial,
+        message: "Duplicate facility detected. Review the existing row before choosing Save Anyway.",
+      };
+    }
+  }
+
+  return addPreparedFacilityRow(prepared);
 }
 
 export async function updateExistingFacilityRow(

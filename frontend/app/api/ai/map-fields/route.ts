@@ -22,8 +22,14 @@ export async function POST(request: Request) {
       body.headers = (await readSheetHeaders(category)).headers;
     }
 
-    if (category && (!body.sampleRows || body.sampleRows.length === 0)) {
+    const fastMappingEnabled = !/^(0|false|no)$/i.test(process.env.DATA_CAPTURE_FAST_MAPPING?.trim() ?? "true");
+
+    if (!fastMappingEnabled && category && (!body.sampleRows || body.sampleRows.length === 0)) {
       body.sampleRows = (await readExistingRecords(category)).rows.slice(0, 10);
+    }
+
+    if (fastMappingEnabled && !body.sampleRows) {
+      body.sampleRows = [];
     }
 
     const payload = aiMapFieldsSchema.parse(body);

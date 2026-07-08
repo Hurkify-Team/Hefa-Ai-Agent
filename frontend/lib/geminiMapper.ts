@@ -514,6 +514,15 @@ async function mapWithGemini(input: FieldMappingInput): Promise<FieldMappingResu
 }
 
 export async function mapPortalTextToSheetHeaders(input: FieldMappingInput): Promise<FieldMappingResult> {
+  const fastMappingEnabled = !/^(0|false|no)$/i.test(process.env.DATA_CAPTURE_FAST_MAPPING?.trim() ?? "true");
+
+  if (fastMappingEnabled) {
+    return deterministicMapPortalText(input, [
+      "Fast deterministic portal mapping was used for Data Capture.",
+      "Set DATA_CAPTURE_FAST_MAPPING=false to use Gemini enrichment for this step.",
+    ]);
+  }
+
   try {
     return await mapWithGemini(input);
   } catch (error) {
