@@ -465,13 +465,32 @@ function valueForHeader(header: string, value: SheetRowValue) {
 }
 
 const SERIAL_HEADER_KEYS = new Set(["sn", "sno", "serialno", "serialnumber", "snumber", "number"]);
+const NON_SERIAL_FIRST_COLUMN_KEYS = new Set(["hefno", "hefanumber", "facilitycode", "facilityid", "facilityname", "name", "address", "lga", "lcda"]);
 
 function compactHeaderName(header: string) {
   return normalizeHeaderName(header).replace(/[^a-z0-9]+/g, "");
 }
 
 function serialHeaderFor(headers: string[]) {
-  return headers.find((header) => SERIAL_HEADER_KEYS.has(compactHeaderName(header))) ?? null;
+  const explicitSerialHeader = headers.find((header) => SERIAL_HEADER_KEYS.has(compactHeaderName(header)));
+
+  if (explicitSerialHeader) {
+    return explicitSerialHeader;
+  }
+
+  const firstHeader = headers[0];
+  const hasFacilityIdentityColumns = headers.some((header) => /hef|facility code/i.test(header)) && headers.some((header) => /facility name|name of facility/i.test(header));
+  const firstHeaderKey = firstHeader ? compactHeaderName(firstHeader) : "";
+
+  // Some imported HEFAMAA Excel sheets have a malformed first header, for example
+  // "niger", where the column is still the serial-number column. When the sheet
+  // also has HEF/NO and Facility Name columns, the first column should be treated
+  // as the serial column unless it is clearly a real data field.
+  if (firstHeader && hasFacilityIdentityColumns && !NON_SERIAL_FIRST_COLUMN_KEYS.has(firstHeaderKey)) {
+    return firstHeader;
+  }
+
+  return null;
 }
 
 function isFilledCell(value: SheetRowValue | undefined) {
@@ -482,6 +501,24 @@ function rowHasDataOutsideSerial(row: SheetRow, serialHeader: string) {
   return Object.entries(row).some(([header, value]) => header !== serialHeader && isFilledCell(value));
 }
 
+function numericSerialValue(value: SheetRowValue | undefined) {
+  if (!isFilledCell(value)) return null;
+  const match = String(value).trim().match(/^\d+$/);
+  return match ? Number(match[0]) : null;
+}
+
+function nextSerialNumber(existingRows: SheetRow[], serialHeader: string) {
+  const serialValues = existingRows
+    .map((existingRow) => numericSerialValue(existingRow[serialHeader]))
+    .filter((value): value is number => Number.isFinite(value));
+
+  if (serialValues.length > 0) {
+    return Math.max(...serialValues) + 1;
+  }
+
+  return existingRows.filter((existingRow) => rowHasDataOutsideSerial(existingRow, serialHeader)).length + 1;
+}
+
 function applyAutoSerialNumber(headers: string[], row: SheetRow, existingRows: SheetRow[]) {
   const serialHeader = serialHeaderFor(headers);
 
@@ -489,7 +526,7 @@ function applyAutoSerialNumber(headers: string[], row: SheetRow, existingRows: S
     return { row, autoSerial: null };
   }
 
-  const nextSerial = existingRows.filter((existingRow) => rowHasDataOutsideSerial(existingRow, serialHeader)).length + 1;
+  const nextSerial = nextSerialNumber(existingRows, serialHeader);
 
   return {
     row: {
@@ -516,15 +553,26 @@ function rowFromHeaderCells(headerCells: SheetHeaderCell[], values: unknown[] = 
 function coerceRowToHeaders(headers: string[], values: SheetRow) {
   const row: SheetRow = {};
   const allowed = new Set(headers);
+  const serialHeader = serialHeaderFor(headers);
 
   for (const header of headers) {
     row[header] = values[header] ?? null;
   }
 
   for (const key of Object.keys(values)) {
-    if (!allowed.has(key)) {
-      throw new Error(`Field "${key}" is not part of the selected sheet headers`);
+    if (allowed.has(key)) {
+      continue;
     }
+
+    const value = values[key];
+    const isEmptyUnknownField = !isFilledCell(value);
+    const isIncomingSerialAlias = Boolean(serialHeader && SERIAL_HEADER_KEYS.has(compactHeaderName(key)));
+
+    if (isEmptyUnknownField || isIncomingSerialAlias) {
+      continue;
+    }
+
+    throw new Error(`Field "${key}" is not part of the selected sheet headers`);
   }
 
   return row;
