@@ -1,6 +1,6 @@
 @import "tailwindcss" source(none);
-@source "./";
-@source "../components";
+@source "./**/*.{ts,tsx}";
+@source "../components/**/*.{ts,tsx}";
 
 
 @theme inline {

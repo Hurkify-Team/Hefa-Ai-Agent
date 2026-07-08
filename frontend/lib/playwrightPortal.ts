@@ -5763,18 +5763,18 @@ export async function openPortal() {
 }
 
 export async function getPortalSessionStatus() {
-  let currentSession = getSession();
-  const debuggingReady = await portalDebuggingEndpointReady(getPortalDebuggingPort());
-
-  if ((!currentSession || currentSession.page.isClosed()) && debuggingReady) {
-    currentSession = await ensureSession({ fastOpen: true }).catch(() => null);
-  }
+  const currentSession = getSession();
+  const debuggingReady = await withTimeout(
+    portalDebuggingEndpointReady(getPortalDebuggingPort()),
+    1_200,
+    "Portal status check timed out.",
+  ).catch(() => false);
 
   const opening = Boolean(portalRuntime.openingSession);
   const active = Boolean(currentSession && !currentSession.page.isClosed());
   const reusableDedicatedBrowser = !active && debuggingReady;
   const profileDir = currentSession?.profileDir ?? getPortalProfileDir();
-  const lock = getPortalProfileLock(profileDir);
+  const lock = !active && !opening && !debuggingReady ? getPortalProfileLock(profileDir) : { locked: false };
 
   return {
     status: active ? "active" : opening || reusableDedicatedBrowser ? "opening" : "closed",
@@ -5835,21 +5835,24 @@ async function detectLoggedInPage(page: Page) {
 }
 
 export async function getPortalSessionManagerStatus() {
-  let session = getSession();
-  if ((!session || session.page.isClosed()) && (await portalDebuggingEndpointReady(getPortalDebuggingPort()))) {
-    session = await reconnectExistingDedicatedPortalSession();
-  }
+  const session = getSession();
 
   const browserOpen = Boolean(session && !session.page.isClosed());
   const currentPage = browserOpen ? session?.page.url() ?? null : null;
   const loginStartedAt = Date.now();
-  const loggedIn = browserOpen && session ? await detectLoggedInPage(session.page) : false;
+  const loggedIn = browserOpen && session
+    ? await withTimeout(detectLoggedInPage(session.page), 1_500, "Portal login status check timed out.").catch(() => false)
+    : false;
   if (browserOpen) updateStartupMetric("loginDetectionMs", loginStartedAt);
   if (browserOpen && session && loggedIn) void persistPortalStorageState(session);
   const facilityListStartedAt = Date.now();
-  const facilityListDetected = browserOpen && session ? await detectFacilityListPage(session.page) : false;
+  const facilityListDetected = browserOpen && session
+    ? await withTimeout(detectFacilityListPage(session.page), 2_000, "Portal facility list check timed out.").catch(() => false)
+    : false;
   if (browserOpen) updateStartupMetric("facilityListReadyMs", facilityListStartedAt);
-  const browserConnected = browserOpen && session ? await isPortalSessionHealthy(session, 800) : false;
+  const browserConnected = browserOpen && session
+    ? await withTimeout(isPortalSessionHealthy(session, 800), 1_200, "Portal browser health check timed out.").catch(() => false)
+    : false;
   const fullScanPreflight = browserOpen && session
     ? {
         browserOpen,
