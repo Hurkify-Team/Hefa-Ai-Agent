@@ -12,8 +12,12 @@ const HEADER_ALIASES: Record<string, string[]> = {
   "facility e-mail": ["Facility E-Mail", "Facility Email", "Email"],
   "owner's name": ["Owner's Name", "Owner Name", "Proprietor"],
   "owner's address": ["Owner's Address", "Owner Address"],
-  contact: ["Contact", "Phone", "Telephone"],
-  "scope of service": ["Scope of Service", "Services"],
+  contact: ["Phone Number", "Contact", "Phone", "Telephone"],
+  "no of observ bed": ["Observation Beds", "Observation Bed", "No of Observation Beds", "No of Observ Bed."],
+  "no of couches": ["Couches", "No of Couches"],
+  "admsn beds": ["Admission Beds", "Admission Bed", "Admsn Beds"],
+  "operating officer": ["Medical Professional In-Charge", "Medical Professional in Charge", "Operating Officer", "Officer in Charge"],
+  "scope of service": ["Scope of the Services in the Facility", "Scope of Service", "Services"],
   "date registered": ["Registration Date", "Date Registered", "Date of Registration"],
   "approval year": ["Approval Year", "Registration Approval Year", "Year of Approval"],
   "renewal year": ["Renewal Year", "Current Renewal"],
@@ -45,14 +49,99 @@ function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function findValue(portalText: string, labels: string[]) {
-  for (const label of labels) {
-    const pattern = new RegExp(escapeRegex(label) + "\\s*:?\\s*([^\\n]+)", "i");
-    const match = portalText.match(pattern);
-    if (match?.[1]) return match[1].trim();
+function portalLines(portalText: string) {
+  return portalText
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+}
+
+function normalizedLabel(value: string) {
+  return normalizeHeaderName(value)
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function looksLikeSectionHeading(value: string) {
+  return /^(facility details|contact details|proprietors details|operations details|bed distribution|sources water and energy|sources of water supply|sources of power supply|methods of waste disposal|medical professional in-?charge|qualification of medical professional in-?charge|documents|professional staff|non-professional staff|admin activities|queries|interest in other health facilities)$/i.test(value.trim());
+}
+
+function findNextLineValue(portalText: string, labels: string[]) {
+  const lines = portalLines(portalText);
+  const normalizedLabels = labels.map(normalizedLabel);
+
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const line = normalizedLabel(lines[index]);
+
+    if (normalizedLabels.includes(line)) {
+      const value = lines[index + 1] ?? null;
+      return value && !looksLikeSectionHeading(value) ? value : null;
+    }
   }
 
   return null;
+}
+
+function sectionBetween(portalText: string, startLabel: RegExp, endLabel: RegExp) {
+  const start = portalText.search(startLabel);
+  if (start === -1) return "";
+  const rest = portalText.slice(start);
+  const end = rest.slice(80).search(endLabel);
+  return end === -1 ? rest : rest.slice(0, end + 80);
+}
+
+function derivePortalHefNumber(portalText: string) {
+  const match = portalText.match(/Selected E-HEFAMAA ID:\s*(hf[-/][^\n\s]+)/i) ?? portalText.match(/\b(hf-\d{4}-\d+-\d+)\b/i);
+  if (!match?.[1]) return null;
+  const parts = match[1].split("-").filter(Boolean);
+  return parts.length >= 3 ? "HEF/" + parts.slice(2).join("/") : match[1].toUpperCase();
+}
+
+function extractFacilityEmail(portalText: string) {
+  const emails = [...portalText.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi)].map((match) => match[0]);
+  const uniqueEmails = [...new Set(emails)];
+  return uniqueEmails.find((email) => !/kennyaremu6@gmail\.com/i.test(email)) ?? uniqueEmails[0] ?? null;
+}
+
+function findValue(portalText: string, labels: string[], header?: string) {
+  const normalizedHeader = header ? normalizeHeaderName(header) : "";
+
+  if (normalizedHeader === "hef/no" || normalizedHeader === "hef no" || normalizedHeader.includes("hef")) {
+    return derivePortalHefNumber(portalText);
+  }
+
+  if (normalizedHeader.includes("e mail") || normalizedHeader.includes("email")) {
+    return extractFacilityEmail(portalText);
+  }
+
+  if (normalizedHeader.includes("owner") || normalizedHeader.includes("proprietor")) {
+    const proprietorSection = sectionBetween(portalText, /proprietors? details/i, /operations details|bed distribution|sources water|medical professional|documents|professional staff/i);
+    if (normalizedHeader.includes("address")) return findNextLineValue(proprietorSection, ["Address"]);
+    return findNextLineValue(proprietorSection, ["Name", "Proprietor Name", "Owner Name"]);
+  }
+
+  if (normalizedHeader.includes("operating officer") || normalizedHeader.includes("professional in charge")) {
+    const officerSection = sectionBetween(portalText, /medical professional in-?charge|operating officer/i, /documents|professional staff|non-professional staff|admin activities/i);
+    return findNextLineValue(officerSection, ["Full Name", "Name", "Operating Officer"]);
+  }
+
+  if (normalizedHeader.includes("couch")) {
+    const bedSection = sectionBetween(portalText, /bed distribution/i, /sources water|sources of water|methods of waste|medical professional|documents|professional staff/i);
+    return findNextLineValue(bedSection, ["Couches", "No of Couches"]);
+  }
+
+  if (normalizedHeader.includes("observ")) {
+    const bedSection = sectionBetween(portalText, /bed distribution/i, /sources water|sources of water|methods of waste|medical professional|documents|professional staff/i);
+    return findNextLineValue(bedSection, ["Observation Beds", "Observation Bed", "No of Observation Beds"]);
+  }
+
+  if (normalizedHeader.includes("admsn") || normalizedHeader.includes("admission")) {
+    const bedSection = sectionBetween(portalText, /bed distribution/i, /sources water|sources of water|methods of waste|medical professional|documents|professional staff/i);
+    return findNextLineValue(bedSection, ["Admission Beds", "Admission Bed"]);
+  }
+
+  return findNextLineValue(portalText, labels);
 }
 
 function normalizeStaffText(value: string) {
@@ -160,6 +249,27 @@ function countRows(rows: string[], aliases: string[]) {
   }, 0);
 }
 
+function extractProfessionalStaffComplements(section: string) {
+  const lines = section
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+  const complements: string[] = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    if (!/^complement$/i.test(lines[index])) {
+      continue;
+    }
+
+    const complement = lines[index + 1]?.trim();
+    if (complement && !/^(type|basic qualification|institution attended|year of qual|reg\.? number|post qualification)$/i.test(complement)) {
+      complements.push(complement);
+    }
+  }
+
+  return complements;
+}
+
 function countProfessionRows(portalText: string, aliases: string[]) {
   const section = extractProfessionalStaffSection(portalText);
 
@@ -168,13 +278,19 @@ function countProfessionRows(portalText: string, aliases: string[]) {
   }
 
   const [bodySection, visibleTablesSection = ""] = section.split(/\nvisible tables:?/i);
-  const bodyCount = countRows(rowsFromStaffSection(bodySection), aliases);
+  const bodyComplements = extractProfessionalStaffComplements(bodySection);
 
-  if (bodyCount > 0) {
-    return bodyCount;
+  if (bodyComplements.length > 0) {
+    return bodyComplements.filter((complement) => rowHasProfession(complement, aliases)).length;
   }
 
-  return countRows(rowsFromStaffSection(visibleTablesSection), aliases);
+  const tableComplements = extractProfessionalStaffComplements(visibleTablesSection);
+
+  if (tableComplements.length > 0) {
+    return tableComplements.filter((complement) => rowHasProfession(complement, aliases)).length;
+  }
+
+  return countRows(rowsFromStaffSection(visibleTablesSection || bodySection), aliases);
 }
 
 function applyProfessionalStaffCounts(input: FieldMappingInput, result: FieldMappingResult): FieldMappingResult {
@@ -221,7 +337,7 @@ function deterministicMapPortalText(input: FieldMappingInput, notes: string[] = 
   for (const header of input.headers) {
     const normalized = normalizeHeaderName(header);
     const labels = HEADER_ALIASES[normalized] ?? [header];
-    const value = findValue(input.portalText, labels);
+    const value = findValue(input.portalText, labels, header);
 
     matchedFields[header] = value;
     if (!value) missingFields.push(header);

@@ -1,7 +1,8 @@
 import { safeRequestJson } from "@/lib/safeJson";
 import { ok, fail } from "@/lib/apiResponse";
 import { logAuditEntry } from "@/lib/auditLog";
-import { addNewFacilityRow, prepareNewFacilityRow } from "@/lib/googleSheets";
+import { addPreparedFacilityRow, clearSheetDataCache, prepareNewFacilityRow, readExistingRecords } from "@/lib/googleSheets";
+import { checkDuplicateFacility } from "@/lib/duplicateChecker";
 import { normalizeHeaderName } from "@/lib/normalizers";
 import { appendRowSchema } from "@/lib/validators";
 import { clearWorkbookSourceCache } from "@/lib/workbookSources";
@@ -50,7 +51,28 @@ export async function POST(request: Request) {
       });
     }
 
-    const result = await addNewFacilityRow(payload.category, payload.values);
+    if (!payload.saveAnyway) {
+      clearSheetDataCache();
+      const existing = await readExistingRecords(prepared.category);
+      const duplicate = checkDuplicateFacility(prepared.row, existing.rows);
+
+      if (duplicate.status !== "no_duplicate") {
+        const bestMatch = duplicate.matches[0];
+        return ok({
+          duplicateBlocked: true,
+          category: prepared.category,
+          status: duplicate.status,
+          matches: duplicate.matches,
+          rowIndex: bestMatch?.rowIndex ?? 0,
+          row: bestMatch?.row ?? prepared.row,
+          autoSerial: prepared.autoSerial,
+          message: "Duplicate facility detected. Review the existing row before choosing Save Anyway.",
+        });
+      }
+    }
+
+    const result = await addPreparedFacilityRow(prepared);
+    clearSheetDataCache();
     clearWorkbookSourceCache("active");
 
     await logAuditEntry({

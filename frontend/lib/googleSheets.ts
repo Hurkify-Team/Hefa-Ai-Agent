@@ -990,26 +990,27 @@ export async function prepareNewFacilityRow(category: string, values: SheetRow):
   };
 }
 
-export async function addNewFacilityRow(category: string, values: SheetRow) {
-  const prepared = await prepareNewFacilityRow(category, values);
+export async function addPreparedFacilityRow(prepared: PreparedFacilityRow) {
   const document = await getSpreadsheetDocument();
 
   if (document.kind === "xlsx") {
     const workbook = await downloadOfficeWorkbook(document);
     const worksheet = getOfficeWorksheet(workbook, prepared.category);
     const headerCells = readOfficeHeaderCells(worksheet);
-    const worksheetRow = worksheet.addRow([]);
+    const nextRowNumber = Math.max(2, (worksheet.actualRowCount || 1) + 1);
+    const worksheetRow = worksheet.getRow(nextRowNumber);
 
     for (const { header, columnIndex } of headerCells) {
       worksheetRow.getCell(columnIndex).value = toWritableCellValue(prepared.row[header]);
     }
 
+    worksheetRow.commit();
     await uploadOfficeWorkbook(workbook);
     clearSheetDataCache();
 
     return {
       category: worksheet.name,
-      rowIndex: Math.max(0, worksheetRow.number - 2),
+      rowIndex: Math.max(0, nextRowNumber - 2),
       row: prepared.row,
       autoSerial: prepared.autoSerial,
     };
@@ -1045,6 +1046,10 @@ export async function addNewFacilityRow(category: string, values: SheetRow) {
     row: prepared.row,
     autoSerial: prepared.autoSerial,
   };
+}
+
+export async function addNewFacilityRow(category: string, values: SheetRow) {
+  return addPreparedFacilityRow(await prepareNewFacilityRow(category, values));
 }
 
 export async function updateExistingFacilityRow(
