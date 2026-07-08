@@ -832,9 +832,40 @@ function tryReadOfficeHeaderCells(worksheet: ExcelJS.Worksheet) {
   }
 }
 
+function officeRowHasFacilityData(worksheetRow: ExcelJS.Row, headerCells: SheetHeaderCell[]) {
+  return headerCells.some(({ header, columnIndex }) => {
+    const normalizedHeader = normalizeHeaderName(header);
+    const value = excelCellValueToSheetValue(worksheetRow.getCell(columnIndex).value);
+
+    if (!isFilledCell(value)) {
+      return false;
+    }
+
+    // Serial-only rows are not facility records. A valid occupied row must have
+    // at least one non-serial field such as facility name, HEF/NO, address, etc.
+    return !SERIAL_HEADER_KEYS.has(compactHeaderName(normalizedHeader));
+  });
+}
+
+function lastOfficeFacilityRowNumber(worksheet: ExcelJS.Worksheet, headerCells: SheetHeaderCell[]) {
+  const scanLimit = Math.max(worksheet.rowCount, worksheet.actualRowCount, 1);
+
+  for (let rowNumber = scanLimit; rowNumber >= 2; rowNumber -= 1) {
+    if (officeRowHasFacilityData(worksheet.getRow(rowNumber), headerCells)) {
+      return rowNumber;
+    }
+  }
+
+  return 1;
+}
+
+function nextOfficeAppendRowNumber(worksheet: ExcelJS.Worksheet, headerCells: SheetHeaderCell[]) {
+  return Math.max(2, lastOfficeFacilityRowNumber(worksheet, headerCells) + 1);
+}
+
 function readOfficeRows(worksheet: ExcelJS.Worksheet, headerCells: SheetHeaderCell[]) {
   const rows: SheetRow[] = [];
-  const lastRowNumber = worksheet.actualRowCount || worksheet.rowCount;
+  const lastRowNumber = lastOfficeFacilityRowNumber(worksheet, headerCells);
 
   for (let rowNumber = 2; rowNumber <= lastRowNumber; rowNumber += 1) {
     const worksheetRow = worksheet.getRow(rowNumber);
@@ -844,7 +875,9 @@ function readOfficeRows(worksheet: ExcelJS.Worksheet, headerCells: SheetHeaderCe
       row[header] = valueForHeader(header, excelCellValueToSheetValue(worksheetRow.getCell(columnIndex).value));
     });
 
-    rows.push(row);
+    if (officeRowHasFacilityData(worksheetRow, headerCells)) {
+      rows.push(row);
+    }
   }
 
   return rows;
@@ -1045,7 +1078,7 @@ export async function addPreparedFacilityRow(prepared: PreparedFacilityRow) {
     const workbook = await downloadOfficeWorkbook(document);
     const worksheet = getOfficeWorksheet(workbook, prepared.category);
     const headerCells = readOfficeHeaderCells(worksheet);
-    const nextRowNumber = Math.max(2, (worksheet.actualRowCount || 1) + 1);
+    const nextRowNumber = nextOfficeAppendRowNumber(worksheet, headerCells);
     const worksheetRow = worksheet.getRow(nextRowNumber);
 
     for (const { header, columnIndex } of headerCells) {
