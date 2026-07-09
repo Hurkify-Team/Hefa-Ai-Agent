@@ -4,7 +4,7 @@ import { safeJsonResponse } from "@/lib/safeJson";
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, LockKeyhole, ShieldCheck } from "lucide-react";
+import { ArrowRight, LockKeyhole, Mail, ShieldCheck } from "lucide-react";
 
 export default function SignInPage() {
   const router = useRouter();
@@ -15,8 +15,11 @@ export default function SignInPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    const next = new URLSearchParams(window.location.search).get("next");
+    const params = new URLSearchParams(window.location.search);
+    const next = params.get("next");
+    const error = params.get("error");
     if (next?.startsWith("/")) setNextPath(next);
+    if (error) setMessage(error);
   }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -59,7 +62,18 @@ export default function SignInPage() {
           <h2 className="mt-5 text-[26px] font-semibold tracking-[-0.02em] text-slate-950">Sign in</h2>
           <p className="mt-1 text-[13px] font-medium text-slate-500">Use your HEFAMAA workspace account.</p>
 
-          <div className="mt-6 space-y-4">
+          <Link className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-[14px] font-semibold text-slate-800 hover:border-blue-200 hover:bg-blue-50" href={`/api/auth/google/start?next=${encodeURIComponent(nextPath)}`}>
+            <Mail className="h-4 w-4 text-blue-600" />
+            Continue with Google
+          </Link>
+
+          <div className="my-5 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+            <span className="h-px flex-1 bg-slate-200" />
+            or use password
+            <span className="h-px flex-1 bg-slate-200" />
+          </div>
+
+          <div className="space-y-4">
             <label className="block text-[12px] font-medium text-slate-700">
               Email
               <input className="mt-1 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-[14px] font-medium outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50" onChange={(event) => setEmail(event.target.value)} type="email" value={email} />

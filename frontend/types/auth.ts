@@ -11,12 +11,15 @@ export type AuthUser = {
   name: string;
   role: TeamRole;
   status: TeamStatus;
+  authProvider?: "password" | "google";
+  avatarUrl?: string;
 };
 
 export type StoredAuthUser = AuthUser & {
   passwordHash: string;
   passwordIterations: number;
   passwordSalt: string;
+  googleSub?: string;
 };
 
 export type AuthSessionPayload = {

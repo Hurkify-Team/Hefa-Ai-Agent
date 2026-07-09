@@ -4,7 +4,7 @@ import { safeJsonResponse } from "@/lib/safeJson";
 import Link from "next/link";
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, ShieldPlus } from "lucide-react";
+import { ArrowRight, Mail, ShieldPlus } from "lucide-react";
 
 import { teamRoles } from "@/lib/authAccess";
 import type { TeamRole } from "@/types/auth";
@@ -51,7 +51,18 @@ export default function SignUpPage() {
             For setup, choose Super User to unlock the full workspace. Later we can restrict public signup and assign department roles from Users & Roles.
           </p>
 
-          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+          <Link className="mt-6 flex h-12 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-[14px] font-semibold text-slate-800 hover:border-blue-200 hover:bg-blue-50" href="/api/auth/google/start?next=/dashboard">
+            <Mail className="h-4 w-4 text-blue-600" />
+            Continue with Google
+          </Link>
+
+          <div className="my-5 flex items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-400">
+            <span className="h-px flex-1 bg-slate-200" />
+            or create password account
+            <span className="h-px flex-1 bg-slate-200" />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
             <label className="block text-[12px] font-medium text-slate-700 sm:col-span-2">
               Full name
               <input className="mt-1 h-12 w-full rounded-xl border border-slate-200 bg-white px-3 text-[14px] font-medium outline-none focus:border-blue-300 focus:ring-4 focus:ring-blue-50" onChange={(event) => setName(event.target.value)} value={name} />

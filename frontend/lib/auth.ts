@@ -19,6 +19,13 @@ type StoredPasswordReset = {
   tokenHash: string;
 };
 
+type GoogleUserInput = {
+  avatarUrl?: string;
+  email: string;
+  googleSub: string;
+  name: string;
+};
+
 type CreateUserInput = {
   department?: string;
   email: string;
@@ -127,6 +134,7 @@ export function initializeAuthStorage() {
     passwordSalt: salt,
     role: "Super User",
     status: "active",
+    authProvider: "password",
   };
 
   writeJsonFile(usersPath, [user]);
@@ -244,6 +252,7 @@ export function createAuthUser(input: CreateUserInput) {
     passwordSalt: salt,
     role: firstUser ? "Super User" : input.role ?? "Front Desk",
     status: input.status ?? "active",
+    authProvider: "password",
   };
 
   writeStoredUsers([...users, user]);
@@ -311,6 +320,48 @@ export function authenticateAuthUser(email: string, password: string) {
 
   user.lastActive = "Now";
   writeStoredUsers(users);
+  return publicUser(user);
+}
+
+export function authenticateGoogleUser(input: GoogleUserInput) {
+  initializeAuthStorage();
+  const users = readStoredUsers();
+  const email = normalizeEmail(input.email);
+  const now = new Date().toISOString();
+  const existing = users.find((candidate) => candidate.email === email || candidate.googleSub === input.googleSub);
+
+  if (existing) {
+    if (existing.status !== "active") throw new Error("This workspace account is paused. Contact a Super User or Administrator.");
+    existing.email = email;
+    existing.googleSub = input.googleSub;
+    existing.authProvider = existing.authProvider ?? "google";
+    existing.avatarUrl = input.avatarUrl ?? existing.avatarUrl;
+    existing.name = input.name.trim() || existing.name;
+    existing.lastActive = "Now";
+    writeStoredUsers(users);
+    return publicUser(existing);
+  }
+
+  const firstUser = users.length === 0;
+  const { hash, salt } = hashPassword(randomBytes(24).toString("hex"));
+  const user: StoredAuthUser = {
+    authProvider: "google",
+    avatarUrl: input.avatarUrl,
+    createdAt: now,
+    department: firstUser ? "Super Administration" : "Front Desk",
+    email,
+    googleSub: input.googleSub,
+    id: "usr_" + randomBytes(8).toString("hex"),
+    lastActive: "Now",
+    name: input.name.trim() || email.split("@")[0] || "Google User",
+    passwordHash: hash,
+    passwordIterations,
+    passwordSalt: salt,
+    role: firstUser ? "Super User" : "Front Desk",
+    status: "active",
+  };
+
+  writeStoredUsers([...users, user]);
   return publicUser(user);
 }
 

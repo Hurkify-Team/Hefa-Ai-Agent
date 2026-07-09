@@ -236,7 +236,7 @@ export function DataCaptureContent() {
   const [tabs, setTabs] = useState<SheetTab[]>([]);
   const [activeCategory, setActiveCategory] = useState("LABORATORY");
   const [headers, setHeaders] = useState(sheetHeaders);
-  const [isLoadingTabs, setIsLoadingTabs] = useState(true);
+  const [isLoadingTabs, setIsLoadingTabs] = useState(false);
   const [isLoadingHeaders, setIsLoadingHeaders] = useState(false);
   const [sheetError, setSheetError] = useState<string | null>(null);
   const [facilityName, setFacilityName] = useState("");
@@ -274,6 +274,7 @@ export function DataCaptureContent() {
   const [legacyResolution, setLegacyResolution] = useState<LegacyFallbackResolution | null>(null);
   const [isResolvingLegacy, setIsResolvingLegacy] = useState(false);
   const preserveCaptureOnNextHeaderLoad = useRef(false);
+  const [liveSheetTabsReady, setLiveSheetTabsReady] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -292,17 +293,6 @@ export function DataCaptureContent() {
       } catch {
         if (!isMounted) return;
         setPortalMessage("Portal status unavailable. Open the portal when ready.");
-      }
-    }
-
-    async function loadPortalSummary() {
-      try {
-        const summary = await fetchApi<PortalFacilitySummary>("/api/portal/summary");
-        if (!isMounted) return;
-        setPortalSummary(summary);
-      } catch {
-        if (!isMounted) return;
-        setPortalSummary(null);
       }
     }
 
@@ -332,16 +322,20 @@ export function DataCaptureContent() {
     }
 
     void loadPortalStatus();
-    void loadPortalSummary();
-    loadTabs();
+    const tabsTimer = window.setTimeout(() => {
+      void loadTabs().then(() => {
+        if (isMounted) setLiveSheetTabsReady(true);
+      });
+    }, 800);
 
     return () => {
       isMounted = false;
+      window.clearTimeout(tabsTimer);
     };
   }, []);
 
   useEffect(() => {
-    if (!activeCategory || sheetError) {
+    if (!activeCategory || sheetError || !liveSheetTabsReady) {
       return;
     }
 
@@ -383,7 +377,7 @@ export function DataCaptureContent() {
     return () => {
       isMounted = false;
     };
-  }, [activeCategory, sheetError]);
+  }, [activeCategory, sheetError, liveSheetTabsReady]);
 
   const activeTabs = useMemo(() => {
     if (tabs.length) {
